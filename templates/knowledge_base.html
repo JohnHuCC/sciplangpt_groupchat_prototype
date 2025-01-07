@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Knowledge Base Contents</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-gray-50">
+    <div class="max-w-6xl mx-auto p-6">
+      <div class="flex justify-between items-center mb-8">
+        <h1 class="text-3xl font-bold">Knowledge Base Contents</h1>
+        <a
+          href="/"
+          class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+          >Back to Generator</a
+        >
+      </div>
+
+      <!-- Stats Section -->
+      <div class="grid grid-cols-4 gap-4 mb-8">
+        <div class="bg-white p-4 rounded-lg shadow">
+          <div class="text-gray-500 text-sm">Total Files</div>
+          <div class="text-2xl font-bold">{{ stats.file_count }}</div>
+        </div>
+        <div class="bg-white p-4 rounded-lg shadow">
+          <div class="text-gray-500 text-sm">Total Chunks</div>
+          <div class="text-2xl font-bold">{{ stats.total_chunks }}</div>
+        </div>
+        <div class="bg-white p-4 rounded-lg shadow">
+          <div class="text-gray-500 text-sm">Total Size</div>
+          <div class="text-2xl font-bold">{{ stats.total_size }}</div>
+        </div>
+      </div>
+
+      <!-- Content Section -->
+      {% for filename, chunks in knowledge_base.items() %}
+      <div class="mb-8 bg-white rounded-lg shadow overflow-hidden">
+        <div class="bg-gray-100 p-4 font-semibold">{{ filename }}</div>
+        <div class="p-4">
+          <div class="space-y-4">
+            {% for chunk in chunks %}
+            <div class="p-3 bg-gray-50 rounded">{{ chunk }}</div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </body>
+</html>

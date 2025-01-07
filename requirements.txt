@@ -1,0 +1,13 @@
+autogen
+openai
+python-dotenv
+
+# for faiss index
+faiss-cpu
+openai
+langchain
+langdetect
+python-docx
+PyMuPDF
+numpy
+python-dotenv
