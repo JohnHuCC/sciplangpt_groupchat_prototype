@@ -1,0 +1,23 @@
+{
+  "agents": [
+    {
+      "id": "bb966858-5655-4e39-b36d-da6b4df3d6a9",
+      "name": "Agent_1",
+      "files": [
+        "HuatuoGPT-Vision_Towards_Injecting_Medical_Visual_Knowledge_into_Multimodal_LLMs_at_Scale_.pdf",
+        "QUST-LLM-_INTEGRATING_LARGE_LANGUAGE_MODELS_FOR_COMPREHENSIVE_SPATIAL_TRANSCRIPTOMICS_ANALYSIS.pdf",
+        "GPTv2.pdf"
+      ],
+      "created_at": "2025-01-07T15:21:04.366453"
+    },
+    {
+      "id": "68ddb075-b7e9-487e-9270-b26de82be55f",
+      "name": "Agent_2",
+      "files": [
+        "SOP__UArizona_Electrical_and_Computer_Engineering_MSc_1215.docx.pdf",
+        "SOP__UofG_Computer_System_Engineering_MSc_1102.docx.pdf"
+      ],
+      "created_at": "2025-01-07T15:34:14.592062"
+    }
+  ]
+}

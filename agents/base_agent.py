@@ -1,6 +1,7 @@
+# agents/base_agent.py
+from typing import Dict, Any
 import os
 from openai import OpenAI
-from typing import Dict, Any
 
 class BaseAgent:
     """Base class for all agents in the system"""
@@ -26,7 +27,7 @@ class BaseAgent:
         missing_keys = [key for key in required_keys if key not in llm_config]
         if missing_keys:
             raise ValueError(f"Missing required configuration keys: {missing_keys}")
-            
+    
     def _create_chat_completion(self, messages: list, temperature: float = 0.7) -> str:
         """Centralized method for creating chat completions"""
         try:
