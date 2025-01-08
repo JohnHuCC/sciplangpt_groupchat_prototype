@@ -1,0 +1,12 @@
+{
+  "name": "熊孩子",
+  "description": "Teddy bear",
+  "created_at": "2025-01-08T18:15:14.865225",
+  "base_prompt": "List all I want to do",
+  "query_templates": [],
+  "knowledge_files": [
+    "年終預定完成事項v3_revised.pdf",
+    "Johnny_1月與2月預定完成事項v1.2.pdf"
+  ],
+  "docs_dir": "agent_pool/熊孩子/docs"
+}

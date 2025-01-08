@@ -1,0 +1,12 @@
+{
+  "name": "馬的法克",
+  "description": "Samuel Jackson",
+  "created_at": "2025-01-08T17:09:05.270053",
+  "base_prompt": "Mother fucker",
+  "query_templates": [],
+  "knowledge_files": [
+    "HuatuoGPT-Vision, Towards Injecting Medical Visual Knowledge into Multimodal LLMs at Scale .pdf",
+    "QUST-LLM- INTEGRATING LARGE LANGUAGE MODELS FOR COMPREHENSIVE SPATIAL TRANSCRIPTOMICS ANALYSIS.pdf"
+  ],
+  "docs_dir": "agent_pool/馬的法克/docs"
+}
