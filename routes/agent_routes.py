@@ -1,113 +1,156 @@
-from flask import Blueprint, request, jsonify, send_from_directory
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, WebSocket
+from fastapi.responses import JSONResponse, FileResponse
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel
 import os
-from agents.agent_pool_manager import AgentPoolManager
+from agents.agent_pool_manager import AgentPoolManager, AgentConfig
 
-agent_bp = Blueprint('agent', __name__)
+router = APIRouter()
 agent_pool = AgentPoolManager()
 
 # 確保上傳目錄存在
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-@agent_bp.route('/api/agents', methods=['GET'])
-def list_agents():
+# Pydantic models for request/response validation
+class AgentCreate(BaseModel):
+    name: str
+    description: str
+    base_prompt: str
+    query_templates: List[str] = []
+
+class AgentQuery(BaseModel):
+    query: str
+
+class AgentResponse(BaseModel):
+    name: str
+    description: str
+    created_at: str
+    type: Optional[str] = None
+
+class WebSocketManager:
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+
+    async def connect(self, websocket: WebSocket, client_id: str):
+        await websocket.accept()
+        self.active_connections[client_id] = websocket
+
+    def disconnect(self, client_id: str):
+        if client_id in self.active_connections:
+            del self.active_connections[client_id]
+
+    async def broadcast(self, message: Dict[str, Any]):
+        for connection in self.active_connections.values():
+            await connection.send_json(message)
+
+ws_manager = WebSocketManager()
+
+@router.websocket("/ws/{client_id}")
+async def websocket_endpoint(websocket: WebSocket, client_id: str):
+    await ws_manager.connect(websocket, client_id)
+    try:
+        while True:
+            data = await websocket.receive_json()
+            # 處理接收到的消息
+            if data.get("type") == "query":
+                agent_name = data.get("agent_name")
+                query = data.get("query")
+                
+                agent = await agent_pool.get_agent(agent_name)
+                if agent:
+                    response = await agent.process_query(query)
+                    await websocket.send_json(response)
+                else:
+                    await websocket.send_json({"error": "Agent not found"})
+    except Exception as e:
+        print(f"WebSocket error: {str(e)}")
+    finally:
+        ws_manager.disconnect(client_id)
+
+@router.get("/api/agents")
+async def list_agents():
     """獲取所有 agents 列表"""
     try:
-        agents = agent_pool.list_agents()
-        return jsonify(agents)
+        # 這裡添加了 await
+        agents = await agent_pool.list_agents()
+        return agents
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@agent_bp.route('/api/agents', methods=['POST'])
-def create_agent():
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.post("/api/agents")
+async def create_agent(
+    name: str = Form(...),
+    description: str = Form(...),
+    base_prompt: str = Form(...),
+    files: List[UploadFile] = File(None),
+    query_templates: List[str] = Form([])
+):
     """創建新的 agent"""
     try:
-        # 處理文件上傳
-        if 'files[]' not in request.files:
-            return jsonify({'error': 'No files provided'}), 400
-            
-        files = request.files.getlist('files[]')
         file_paths = []
-        
-        for file in files:
-            if file.filename:
+        if files:
+            for file in files:
                 filepath = os.path.join(UPLOAD_FOLDER, file.filename)
-                file.save(filepath)
+                content = await file.read()
+                with open(filepath, "wb") as f:
+                    f.write(content)
                 file_paths.append(filepath)
         
-        # 獲取其他數據
-        data = request.form
-        required_fields = ['name', 'description', 'base_prompt']
-        
-        # 驗證必需字段
-        for field in required_fields:
-            if field not in data:
-                return jsonify({'error': f'Missing required field: {field}'}), 400
-        
-        # 處理 query_templates
-        query_templates = []
-        i = 0
-        while f'query_template_{i}' in data:
-            template = data[f'query_template_{i}']
-            if template.strip():  # 只添加非空模板
-                query_templates.append(template)
-            i += 1
-        
-        # 創建 agent
-        config = agent_pool.create_agent(
-            name=data['name'],
-            description=data['description'],
-            knowledge_files=file_paths,
-            base_prompt=data['base_prompt'],
+        # 創建配置對象
+        config = AgentConfig(
+            name=name,
+            description=description,
+            base_prompt=base_prompt,
             query_templates=query_templates
         )
         
-        # 清理臨時文件
-        for filepath in file_paths:
-            if os.path.exists(filepath):
-                os.remove(filepath)
-        
-        return jsonify(config)
+        try:
+            # 創建 agent
+            result = await agent_pool.create_agent(
+                config=config,
+                knowledge_files=file_paths
+            )
+            return result
+        finally:
+            # 清理臨時文件
+            for filepath in file_paths:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-@agent_bp.route('/api/agents/<name>', methods=['GET'])
-def get_agent(name):
+@router.get("/api/agents/{name}")
+async def get_agent(name: str):
     """獲取特定 agent 的詳細信息"""
-    agent = agent_pool.get_agent(name)
-    if agent is None:
-        return jsonify({'error': 'Agent not found'}), 404
-    return jsonify(agent.to_dict())
+    try:
+        agent = await agent_pool.get_agent(name)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        return agent.to_dict()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-@agent_bp.route('/api/agents/<name>', methods=['DELETE'])
-def delete_agent(name):
-    """刪除特定 agent"""
-    success = agent_pool.delete_agent(name)
-    if not success:
-        return jsonify({'error': 'Agent not found'}), 404
-    return jsonify({'message': f'Agent {name} deleted successfully'})
-
-@agent_bp.route('/api/agents/<name>/query', methods=['POST'])
-def query_agent(name):
+@router.post("/api/agents/{name}/query")
+async def query_agent(name: str, query: AgentQuery):
     """使用特定 agent 進行查詢"""
     try:
-        data = request.json
-        query = data.get('query')
-        if not query:
-            return jsonify({'error': 'Query is required'}), 400
-            
-        agent = agent_pool.get_agent(name)
+        agent = await agent_pool.get_agent(name)
         if agent is None:
-            return jsonify({'error': 'Agent not found'}), 404
+            raise HTTPException(status_code=404, detail="Agent not found")
             
-        response = agent.process_query(query)
-        return jsonify(response)
+        response = await agent.process_query(query.query)
+        return response
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-@agent_bp.route('/uploads/<path:filename>')
-def download_file(filename):
+
+@router.get("/uploads/{filename}")
+async def download_file(filename: str):
     """提供上傳文件的下載"""
-    return send_from_directory(UPLOAD_FOLDER, filename)
+    file_path = os.path.join(UPLOAD_FOLDER, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path)

@@ -1,28 +1,60 @@
-from flask import Blueprint, jsonify, request, render_template
-from typing import List, Dict, Any
-import asyncio
+from fastapi import APIRouter, Request, HTTPException, WebSocket
+from fastapi.responses import JSONResponse  # 如果需要手動回傳 JSON 的話
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 from agents.agent_pool_manager import AgentPoolManager
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
+import asyncio  # 添加 asyncio 導入，因為我們使用了 gather
 
-chat_bp = Blueprint('chat', __name__)
+router = APIRouter()
 agent_pool = AgentPoolManager()
+templates = Jinja2Templates(directory="templates")
+
+# 其餘代碼保持不變...
 
 # 簡單的內存存儲聊天記錄
-# 在實際應用中，應該使用資料庫
 chat_history = {}
 chat_rooms = {}
+
+class ChatRoomCreate(BaseModel):
+    name: str
+    agent_names: List[str]
+
+class ChatMessage(BaseModel):
+    message: str
+
+# 添加更多 Pydantic 模型來規範資料結構
+class ChatRoom(BaseModel):
+    id: str
+    name: str
+    agent_names: List[str]
+    created_at: str
+
+class Message(BaseModel):
+    id: str
+    sender: str
+    content: str
+    timestamp: str
+    error: Optional[str] = None
+    used_knowledge: Optional[List[Dict[str, Any]]] = None
+
+class ChatResponse(BaseModel):
+    user_message: Message
+    agent_responses: List[Dict[str, Any]] 
 
 async def process_agent_query(agent_name: str, query: str) -> Dict[str, Any]:
     """非同步處理單個 agent 的查詢"""
     try:
-        agent = agent_pool.get_agent(agent_name)
+        # 使用 await 調用異步方法
+        agent = await agent_pool.get_agent(agent_name)
         if not agent:
             return {
                 'error': f'Agent {agent_name} not found',
                 'agent_name': agent_name
             }
             
-        response = await agent.process_query_async(query)
+        response = await agent.process_query(query)
         return {
             'agent_name': agent_name,
             'response': response['response'],
@@ -36,80 +68,70 @@ async def process_agent_query(agent_name: str, query: str) -> Dict[str, Any]:
             'timestamp': datetime.now().isoformat()
         }
 
-@chat_bp.route('/chat')
-def chat_room():
+@router.get("/chat")
+async def chat_room(request: Request):
     """渲染聊天室頁面"""
-    return render_template('chat.html')
+    return templates.TemplateResponse("chat.html", {"request": request})
 
-@chat_bp.route('/api/chat/rooms', methods=['POST'])
-def create_chat_room():
+@router.post("/api/chat/rooms")
+async def create_chat_room(room_data: ChatRoomCreate):
     """創建新的聊天室"""
     try:
-        data = request.json
-        room_name = data.get('name')
-        agent_names = data.get('agent_names', [])
-        
-        if not room_name:
-            return jsonify({'error': 'Room name is required'}), 400
-            
-        if not agent_names:
-            return jsonify({'error': 'At least one agent is required'}), 400
+        if not room_data.agent_names:
+            raise HTTPException(status_code=400, detail="At least one agent is required")
             
         # 驗證所有 agent 是否存在
-        for agent_name in agent_names:
-            if not agent_pool.get_agent(agent_name):
-                return jsonify({'error': f'Agent {agent_name} not found'}), 404
+        for agent_name in room_data.agent_names:
+            # 添加 await
+            agent = await agent_pool.get_agent(agent_name)
+            if not agent:
+                raise HTTPException(status_code=404, detail=f"Agent {agent_name} not found")
         
-        room_id = str(len(chat_rooms) + 1)  # 簡單的 ID 生成
+        room_id = str(len(chat_rooms) + 1)
         chat_rooms[room_id] = {
             'id': room_id,
-            'name': room_name,
-            'agent_names': agent_names,
+            'name': room_data.name,
+            'agent_names': room_data.agent_names,
             'created_at': datetime.now().isoformat()
         }
         chat_history[room_id] = []
         
-        return jsonify(chat_rooms[room_id])
+        return chat_rooms[room_id]
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-@chat_bp.route('/api/chat/rooms', methods=['GET'])
-def list_chat_rooms():
+@router.get("/api/chat/rooms")
+async def list_chat_rooms():
     """獲取所有聊天室列表"""
-    return jsonify(list(chat_rooms.values()))
+    return list(chat_rooms.values())
 
-@chat_bp.route('/api/chat/rooms/<room_id>', methods=['GET'])
-def get_chat_room(room_id):
+@router.get("/api/chat/rooms/{room_id}")
+async def get_chat_room(room_id: str):
     """獲取特定聊天室信息"""
     if room_id not in chat_rooms:
-        return jsonify({'error': 'Chat room not found'}), 404
-    return jsonify(chat_rooms[room_id])
+        raise HTTPException(status_code=404, detail="Chat room not found")
+    return chat_rooms[room_id]
 
-@chat_bp.route('/api/chat/rooms/<room_id>/messages', methods=['GET'])
-def get_chat_history(room_id):
+@router.get("/api/chat/rooms/{room_id}/messages")
+async def get_chat_history(room_id: str):
     """獲取聊天室的消息歷史"""
     if room_id not in chat_history:
-        return jsonify({'error': 'Chat room not found'}), 404
-    return jsonify(chat_history[room_id])
+        raise HTTPException(status_code=404, detail="Chat room not found")
+    return chat_history[room_id]
 
-@chat_bp.route('/api/chat/rooms/<room_id>/messages', methods=['POST'])
-async def send_message(room_id):
+@router.post("/api/chat/rooms/{room_id}/messages")
+async def send_message(room_id: str, message: ChatMessage):
     """發送消息到聊天室"""
     try:
         if room_id not in chat_rooms:
-            return jsonify({'error': 'Chat room not found'}), 404
-            
-        data = request.json
-        message = data.get('message')
-        if not message:
-            return jsonify({'error': 'Message is required'}), 400
+            raise HTTPException(status_code=404, detail="Chat room not found")
             
         # 記錄用戶消息
         user_message = {
             'id': str(len(chat_history[room_id]) + 1),
             'sender': 'user',
-            'content': message,
+            'content': message.message,
             'timestamp': datetime.now().isoformat()
         }
         chat_history[room_id].append(user_message)
@@ -119,7 +141,7 @@ async def send_message(room_id):
         
         # 非同步處理所有 agent 的回應
         tasks = [
-            process_agent_query(agent_name, message)
+            process_agent_query(agent_name, message.message)
             for agent_name in agent_names
         ]
         
@@ -137,21 +159,21 @@ async def send_message(room_id):
             }
             chat_history[room_id].append(agent_message)
         
-        return jsonify({
+        return {
             'user_message': user_message,
             'agent_responses': agent_responses
-        })
+        }
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-@chat_bp.route('/api/chat/rooms/<room_id>', methods=['DELETE'])
-def delete_chat_room(room_id):
+@router.delete("/api/chat/rooms/{room_id}")
+async def delete_chat_room(room_id: str):
     """刪除聊天室"""
     if room_id not in chat_rooms:
-        return jsonify({'error': 'Chat room not found'}), 404
+        raise HTTPException(status_code=404, detail="Chat room not found")
         
     del chat_rooms[room_id]
     del chat_history[room_id]
     
-    return jsonify({'message': f'Chat room {room_id} deleted successfully'})
+    return {"message": f"Chat room {room_id} deleted successfully"}

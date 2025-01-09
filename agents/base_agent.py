@@ -1,8 +1,7 @@
-import os
-from openai import OpenAI
+from openai import AsyncOpenAI
 from typing import Dict, Any, Optional
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import os
 
 class BaseAgent:
     """Base class for all agents in the system"""
@@ -20,9 +19,9 @@ class BaseAgent:
         self._initialize_client()
     
     def _initialize_client(self):
-        """Initialize OpenAI client"""
+        """Initialize AsyncOpenAI client"""
         try:
-            self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            self.client = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         except Exception as e:
             raise RuntimeError(f"Failed to initialize OpenAI client: {str(e)}")
     
@@ -39,24 +38,8 @@ class BaseAgent:
             
     async def _create_chat_completion_async(self, messages: list, temperature: float = 0.7) -> str:
         """非同步方式創建聊天完成"""
-        loop = asyncio.get_event_loop()
         try:
-            response = await loop.run_in_executor(
-                self._executor,
-                lambda: self.client.chat.completions.create(
-                    model=self.llm_config['model'],
-                    messages=messages,
-                    temperature=temperature
-                )
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            raise RuntimeError(f"Failed to create chat completion: {str(e)}")
-            
-    def _create_chat_completion(self, messages: list, temperature: float = 0.7) -> str:
-        """同步方式創建聊天完成"""
-        try:
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=self.llm_config['model'],
                 messages=messages,
                 temperature=temperature

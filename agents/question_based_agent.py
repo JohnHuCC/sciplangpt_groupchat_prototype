@@ -1,39 +1,28 @@
 from typing import Dict, Any, List
 import os
 import re
-import asyncio
-from openai import OpenAI
+from fastapi import HTTPException
+from pydantic import BaseModel
 from agents.base_agent import BaseAgent
-from utils.query_knowledge import query_knowledge
+from utils.query_knowledge import query_knowledge_async
 from typing import Optional
+
+class ResearchQuestion(BaseModel):
+    question: str
+    knowledge: List[Dict[str, Any]]
+
+class ResearchPlan(BaseModel):
+    questions: str
+    knowledge_results: Dict[str, List[Dict[str, Any]]]
+    research_plan: str
 
 class QuestionBasedResearchAgent(BaseAgent):
     def __init__(self, name: str, base_prompt: str, docs_dir: str,
                  query_templates: List[str], llm_config: Optional[Dict[str, Any]] = None):
         super().__init__(name, base_prompt, docs_dir, llm_config)
         self.query_templates = query_templates
-    
-    def to_dict(self) -> Dict:
-        """Convert agent instance to dictionary representation"""
-        base_dict = super().to_dict()
-        base_dict.update({
-            "type": "question_based_research",
-            "query_templates": self.query_templates
-        })
-        return base_dict
-    
-    @classmethod
-    def from_config(cls, config: Dict) -> 'QuestionBasedResearchAgent':
-        """Create agent instance from configuration dictionary"""
-        return cls(
-            name=config["name"],
-            base_prompt=config["base_prompt"],
-            docs_dir=config["docs_dir"],
-            query_templates=config["query_templates"],
-            llm_config=config.get("llm_config")
-        )
-        
-    async def generate_research_questions_async(self, research_area: str) -> str:
+
+    async def generate_research_questions(self, research_area: str) -> str:
         """非同步生成研究問題"""
         template = self.query_templates[0] if self.query_templates else """
 請針對研究領域「{research_area}」生成具體的研究問題。
@@ -70,7 +59,7 @@ class QuestionBasedResearchAgent(BaseAgent):
             
         except Exception as e:
             print(f"生成問題時發生錯誤: {str(e)}")
-            raise
+            raise HTTPException(status_code=500, detail=f"Failed to generate questions: {str(e)}")
 
     def parse_questions(self, text: str) -> List[str]:
         """從文本中提取問題"""
@@ -87,27 +76,20 @@ class QuestionBasedResearchAgent(BaseAgent):
         print(f"總共解析出 {len(questions)} 個問題")
         return questions
 
-    async def query_knowledge_for_questions_async(self, questions: str) -> Dict[str, List[Dict[str, str]]]:
+    async def query_knowledge_for_questions(self, questions: str) -> Dict[str, List[Dict[str, str]]]:
         """非同步查詢知識庫"""
         results = {}
         
         question_list = self.parse_questions(questions)
         if not question_list:
-            raise ValueError(f"未能從文本中解析出有效問題:\n{questions}")
+            raise HTTPException(status_code=400, detail=f"No valid questions found in text:\n{questions}")
             
         print(f"\n開始查詢 {self.name} 的知識庫...")
         
-        # 創建所有問題的查詢任務
+        # 並行處理所有問題的查詢
         tasks = []
         for question in question_list:
-            loop = asyncio.get_event_loop()
-            task = loop.run_in_executor(
-                self._executor,
-                query_knowledge,
-                question,
-                3,
-                self.docs_dir
-            )
+            task = query_knowledge_async(question, 3, self.docs_dir)
             tasks.append((question, task))
             
         # 等待所有查詢完成
@@ -125,14 +107,13 @@ class QuestionBasedResearchAgent(BaseAgent):
                 print(f"查詢問題「{question}」時發生錯誤: {str(e)}")
                 
         if not results:
-            raise ValueError("沒有找到任何問題的相關知識")
+            raise HTTPException(status_code=404, detail="No relevant knowledge found for any questions")
             
         return results
 
-    async def synthesize_plan_async(self, questions: str, knowledge_results: Dict[str, List[Dict[str, str]]]) -> str:
+    async def synthesize_plan(self, questions: str, knowledge_results: Dict[str, List[Dict[str, str]]]) -> str:
         """非同步合成最終的研究計畫"""
         try:
-            # 使用最後一個模板作為計畫生成模板，如果沒有則使用默認模板
             template = self.query_templates[-1] if len(self.query_templates) > 1 else """\
 請根據以下研究問題和相關知識，生成一個完整的研究計畫：
 
@@ -176,44 +157,31 @@ class QuestionBasedResearchAgent(BaseAgent):
             return await self._create_chat_completion_async(messages)
             
         except Exception as e:
-            raise RuntimeError(f"Failed to synthesize research plan: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to synthesize research plan: {str(e)}")
         
-    async def generate_research_plan_async(self, research_area: str) -> Dict[str, Any]:
+    async def generate_research_plan(self, research_area: str) -> ResearchPlan:
         """非同步生成研究計畫的主要流程"""
         try:
             print(f"\n==== 開始使用 {self.name} 為 '{research_area}' 生成研究計畫 ====")
             
             # 1. 生成問題
             print("\n1. 生成研究問題...")
-            questions = await self.generate_research_questions_async(research_area)
+            questions = await self.generate_research_questions(research_area)
             
             # 2. 查詢知識庫
             print("\n2. 查詢知識庫...")
-            knowledge_results = await self.query_knowledge_for_questions_async(questions)
+            knowledge_results = await self.query_knowledge_for_questions(questions)
             
             # 3. 生成計畫
             print("\n3. 生成研究計畫...")
-            research_plan = await self.synthesize_plan_async(questions, knowledge_results)
+            research_plan = await self.synthesize_plan(questions, knowledge_results)
             
-            return {
-                "questions": questions,
-                "knowledge_results": knowledge_results,
-                "research_plan": research_plan
-            }
+            return ResearchPlan(
+                questions=questions,
+                knowledge_results=knowledge_results,
+                research_plan=research_plan
+            )
             
         except Exception as e:
             print(f"\n❌ 生成研究計畫時發生錯誤: {str(e)}")
-            raise RuntimeError(f"Failed to generate research plan: {str(e)}")
-            
-    # 保留同步方法以保持向後相容性
-    def generate_research_questions(self, research_area: str) -> str:
-        """同步方式生成研究問題"""
-        return asyncio.run(self.generate_research_questions_async(research_area))
-        
-    def query_knowledge_for_questions(self, questions: str) -> Dict[str, List[Dict[str, str]]]:
-        """同步方式查詢知識庫"""
-        return asyncio.run(self.query_knowledge_for_questions_async(questions))
-        
-    def generate_research_plan(self, research_area: str) -> Dict[str, Any]:
-        """同步方式生成研究計畫"""
-        return asyncio.run(self.generate_research_plan_async(research_area))
+            raise HTTPException(status_code=500, detail=f"Failed to generate research plan: {str(e)}")

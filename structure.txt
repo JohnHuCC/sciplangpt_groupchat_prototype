@@ -1,0 +1,28 @@
+/agents
+├── base_agent.py         # Agent 的基礎類，定義基本 LLM 操作和設定
+├── dynamic_agent.py      # 動態 Agent，處理一般的知識查詢和回應
+├── question_based_agent.py # 研究問題導向的 Agent，專門處理研究計畫生成
+├── agent_pool_manager.py  # Agent 池管理器，處理 Agent 的創建、獲取、刪除等操作
+
+/routes
+├── agent_routes.py      # Agent 相關的 API 端點（創建、刪除、更新 Agent）
+├── chat_routes.py       # 聊天相關的 API 端點（聊天室、訊息處理）
+
+/static/js
+├── app.js              # 前端主要 JavaScript 邏輯
+├── ChatRoom.js         # 聊天室相關的前端組件
+/templates
+├── chat.html           # 聊天介面的 HTML 模板
+├── index.html          # 主頁面模板
+├── knowledge_base.html # 知識庫頁面模板
+
+/utils
+├── aggregate_research_plan_with_cleanup.py  # 整合和清理研究計畫
+├── extract_last_agent_response.py          # 提取 Agent 最後的回應
+├── form_prompt_with_context.py            # 根據上下文生成提示
+├── generate_research_question.py          # 生成研究問題
+├── query_knowledge.py                     # 知識庫查詢功能
+
+├── create_embedding.py                   # 生成和管理文本嵌入
+├── app.py                               # Flask 應用入口
+├── sciplangpt_groupchat.py              # 群組聊天的主要邏輯

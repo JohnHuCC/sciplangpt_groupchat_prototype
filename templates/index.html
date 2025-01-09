@@ -14,10 +14,7 @@
   </head>
   <body>
     <div id="root"></div>
-    <!-- 注意这里添加了 type="text/babel" -->
-    <script
-      type="text/babel"
-      src="{{ url_for('static', filename='js/app.js') }}"
-    ></script>
+    <!-- 使用直接路徑 -->
+    <script type="text/babel" src="/static/js/app.js"></script>
   </body>
 </html>

@@ -1,18 +1,37 @@
-def extract_last_agent_response(chat_result, termination_phrase="end chat", min_word_count=20):
+from typing import Dict, Any
+from fastapi import HTTPException
+
+async def extract_last_agent_response(
+    chat_result: Dict[str, Any], 
+    termination_phrase: str = "end chat", 
+    min_word_count: int = 20
+) -> str:
     """
-    Extracts the most recent meaningful response from the agent in a back-and-forth conversation.
+    非同步提取代理的最近有意義回應
     
     Args:
-        chat_result: The result object containing the chat history.
-        termination_phrase: The phrase indicating termination (default is "end chat").
-    
+        chat_result: Chat history result object
+        termination_phrase: Phrase indicating chat termination
+        min_word_count: Minimum word count for valid response
     Returns:
-        The content of the latest meaningful agent response, or an empty string if none is found.
+        Latest meaningful agent response
+    Raises:
+        HTTPException: If extraction fails
     """
-    # print(chat_result.chat_history)
-    for message in reversed(chat_result.chat_history):
-        # Check for agent's response and exclude termination messages
-        if len(message["content"].split()) >= min_word_count:
-            # print("this is the message got saved \n\n" + message["content"])
-            return message["content"]
-    return ""
+    try:
+        if not chat_result or 'chat_history' not in chat_result:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid chat result format"
+            )
+
+        for message in reversed(chat_result.chat_history):
+            if len(message["content"].split()) >= min_word_count:
+                return message["content"]
+        return ""
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error extracting agent response: {str(e)}"
+        )

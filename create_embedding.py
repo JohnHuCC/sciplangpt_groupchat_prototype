@@ -7,13 +7,14 @@ from docx import Document
 import fitz  # PyMuPDF
 import pickle
 import dotenv
-from openai import OpenAI
+from openai import AsyncOpenAI
 import re
+from fastapi import HTTPException
 
 dotenv.load_dotenv()
 
 # Set OpenAI API Key
-client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+client = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 # Constants
 EMBEDDING_MODEL = "text-embedding-3-large"
@@ -35,14 +36,14 @@ def preprocess_text(text: str) -> str:
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
-def embed_text(text: str) -> Optional[np.ndarray]:
-    """Generate an embedding for a given text."""
+async def embed_text(text: str) -> Optional[np.ndarray]:
+    """Generate an embedding for a given text asynchronously."""
     if not text.strip():
         print("Warning: Empty text provided for embedding")
         return None
         
     try:
-        response = client.embeddings.create(
+        response = await client.embeddings.create(
             input=text,
             model=EMBEDDING_MODEL
         )
@@ -66,8 +67,8 @@ def ensure_embedding_dir(docs_dir: str) -> str:
     os.makedirs(embedding_dir, exist_ok=True)
     return embedding_dir
 
-def read_file(filepath: str) -> Optional[str]:
-    """Read file content based on its extension."""
+async def read_file(filepath: str) -> Optional[str]:
+    """Read file content based on its extension asynchronously."""
     if not os.path.exists(filepath):
         print(f"File not found: {filepath}")
         return None
@@ -91,10 +92,10 @@ def read_file(filepath: str) -> Optional[str]:
         print(f"Error reading file {filepath}: {str(e)}")
         return None
 
-def process_files(docs_dir: str):
-    """Process files and create embeddings."""
+async def process_files_async(docs_dir: str):
+    """Process files and create embeddings asynchronously."""
     if not os.path.exists(docs_dir):
-        raise FileNotFoundError(f"Directory not found: {docs_dir}")
+        raise HTTPException(status_code=404, detail=f"Directory not found: {docs_dir}")
 
     files = [f for f in os.listdir(docs_dir) 
              if os.path.isfile(os.path.join(docs_dir, f))]
@@ -116,7 +117,7 @@ def process_files(docs_dir: str):
         filepath = os.path.join(docs_dir, filename)
         print(f"Processing: {filename}")
         
-        content = read_file(filepath)
+        content = await read_file(filepath)
         if not content:
             continue
             
@@ -128,7 +129,7 @@ def process_files(docs_dir: str):
         # Generate embeddings
         chunk_embeddings = []
         for chunk in chunks:
-            embedding = embed_text(chunk)
+            embedding = await embed_text(chunk)
             if embedding is not None:
                 chunk_embeddings.append(embedding)
                 texts.append(chunk)
@@ -162,16 +163,16 @@ def process_files(docs_dir: str):
                 }, f)
             print(f"Saved index and metadata to {embedding_dir}")
         except Exception as e:
-            print(f"Error saving index files: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error saving index files: {str(e)}")
     else:
         print("No valid embeddings generated from any files")
 
-def load_index(docs_dir: str) -> Tuple[faiss.Index, List[str], List[str]]:
-    """Load index and metadata from the specified directory."""
+async def load_index(docs_dir: str) -> Tuple[faiss.Index, List[str], List[str]]:
+    """Load index and metadata from the specified directory asynchronously."""
     embedding_dir, index_path, metadata_path = get_embedding_paths(docs_dir)
     
     if not os.path.exists(index_path) or not os.path.exists(metadata_path):
-        raise FileNotFoundError(f"Index files not found in {embedding_dir}")
+        raise HTTPException(status_code=404, detail=f"Index files not found in {embedding_dir}")
 
     try:
         # Load metadata
@@ -185,21 +186,21 @@ def load_index(docs_dir: str) -> Tuple[faiss.Index, List[str], List[str]]:
         return index, texts, sources
         
     except Exception as e:
-        raise Exception(f"Error loading index: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error loading index: {str(e)}")
 
-def query_index(query: str, k: int = 3, docs_dir: str = None) -> Tuple[List[str], List[str], List[float]]:
-    """Query the index for relevant documents."""
+async def query_index_async(query: str, k: int = 3, docs_dir: str = None) -> Tuple[List[str], List[str], List[float]]:
+    """Query the index for relevant documents asynchronously."""
     if not docs_dir:
-        raise ValueError("docs_dir parameter is required")
+        raise HTTPException(status_code=400, detail="docs_dir parameter is required")
 
     try:
         # Load index
-        index, texts, sources = load_index(docs_dir)
+        index, texts, sources = await load_index(docs_dir)
         
         # Generate query embedding
-        query_embedding = embed_text(query)
+        query_embedding = await embed_text(query)
         if query_embedding is None:
-            raise ValueError("Failed to generate query embedding")
+            raise HTTPException(status_code=500, detail="Failed to generate query embedding")
         
         # Search
         D, I = index.search(query_embedding.reshape(1, -1), k)
@@ -215,9 +216,4 @@ def query_index(query: str, k: int = 3, docs_dir: str = None) -> Tuple[List[str]
         return zip(*results)  # Unzip into separate lists
         
     except Exception as e:
-        raise Exception(f"Error during query: {str(e)}")
-
-if __name__ == "__main__":
-    import sys
-    target_dir = sys.argv[1] if len(sys.argv) > 1 else "docs"
-    process_files(target_dir)
+        raise HTTPException(status_code=500, detail=f"Error during query: {str(e)}")
