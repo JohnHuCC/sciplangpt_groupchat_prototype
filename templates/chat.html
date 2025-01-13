@@ -8,6 +8,12 @@
     <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 在 chat.html 中添加 -->
+    <script>
+      // 設置全局的 API 基礎 URL
+      window.API_BASE_URL =
+        window.location.protocol + "//" + window.location.host;
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,0 +1,22 @@
+{
+  "name": "general_qa",
+  "class_path": "agents.qa_agent.QAAgent",
+  "description": "通用問答助手，可以回答各種領域的問題",
+  "type": "qa",
+  "base_prompt": "你是一個專業的問答助手，專長於提供清晰、準確的回答。請根據提供的知識來回答問題，如果知識庫中沒有相關信息，請明確說明。",
+  "parameters": {
+    "prompt_style": "formal",
+    "output_format": "markdown",
+    "max_knowledge_items": 3,
+    "similarity_threshold": 0.6,
+    "include_sources": true,
+    "temperature": 0.7
+  },
+  "required_inputs": ["query"],
+  "knowledge_config": {
+    "embedding_type": "text",
+    "chunk_size": 500,
+    "use_embeddings": true,
+    "max_sources": 3
+  }
+}

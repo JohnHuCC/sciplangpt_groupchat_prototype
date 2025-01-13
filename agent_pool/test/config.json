@@ -1,0 +1,35 @@
+{
+  "name": "test",
+  "description": "no comment",
+  "created_at": "2025-01-09T17:11:58.184590",
+  "template_name": "research_assistant",
+  "type": "research",
+  "base_prompt": "你是一個專業的研究助手，專長於幫助研究者進行文獻分析和研究規劃。請根據提供的資料，生成深入的分析和建議。",
+  "parameters": {
+    "prompt_style": "academic",
+    "output_format": "markdown",
+    "max_knowledge_items": 5,
+    "similarity_threshold": 0.7,
+    "include_sources": true,
+    "temperature": 0.5,
+    "citation_style": "APA"
+  },
+  "required_inputs": [
+    "research_topic",
+    "research_objective"
+  ],
+  "knowledge_config": {
+    "embedding_type": "text",
+    "chunk_size": 1000
+  },
+  "knowledge_files": [
+    "1-s2.0-S0142961222002137-main.pdf",
+    "1-s2.0-S246820202030070X-main copy.pdf",
+    "1-s2.0-S246820202030070X-main.pdf",
+    "1-s2.0-S0956566321001937-main.pdf",
+    "1-s2.0-S1673852721000941-main.pdf",
+    "10.1016_J.JCOL.2017.10.002.pdf",
+    "10.1038_s41598-018-27179-6.pdf"
+  ],
+  "docs_dir": "agent_pool/test/docs"
+}

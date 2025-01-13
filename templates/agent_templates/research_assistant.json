@@ -1,0 +1,9 @@
+{
+  "name": "research_assistant",
+  "type": "research",
+  "description": "Research assistant for analyzing information",
+  "base_prompt": "You are a research assistant AI...",
+  "parameters": {},
+  "required_inputs": [],
+  "knowledge_config": {}
+}

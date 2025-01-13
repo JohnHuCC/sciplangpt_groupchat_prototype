@@ -1,0 +1,15 @@
+{
+  "name": "test6",
+  "description": "no comment",
+  "created_at": "2025-01-13T13:07:37.257128",
+  "template_name": "research_assistant",
+  "type": "research",
+  "base_prompt": "You are a research assistant AI...",
+  "parameters": {},
+  "required_inputs": [],
+  "knowledge_config": {},
+  "knowledge_files": [
+    "QUST-LLM- INTEGRATING LARGE LANGUAGE MODELS FOR COMPREHENSIVE SPATIAL TRANSCRIPTOMICS ANALYSIS.pdf"
+  ],
+  "docs_dir": "agent_pool/test6/docs"
+}

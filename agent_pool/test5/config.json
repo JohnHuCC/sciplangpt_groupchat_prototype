@@ -1,0 +1,15 @@
+{
+  "name": "test5",
+  "description": "no comment",
+  "created_at": "2025-01-13T13:07:02.358347",
+  "template_name": "research_assistant",
+  "type": "research",
+  "base_prompt": "You are a research assistant AI...",
+  "parameters": {},
+  "required_inputs": [],
+  "knowledge_config": {},
+  "knowledge_files": [
+    "Lung-Chip Operation Manual.pdf"
+  ],
+  "docs_dir": "agent_pool/test5/docs"
+}

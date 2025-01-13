@@ -1,86 +1,106 @@
-// AgentPoolApp.js
-const AgentPool = () => {
-  // State hooks
-  const [agents, setAgents] = React.useState([]);
-  const [selectedAgents, setSelectedAgents] = React.useState([]);
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState(null);
-  const [isCreating, setIsCreating] = React.useState(false);
-  const [newAgent, setNewAgent] = React.useState({
+// app.js
+const { useState, useEffect } = React;
+
+const App = () => {
+  const [agents, setAgents] = useState([]);
+  const [selectedAgents, setSelectedAgents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [newAgent, setNewAgent] = useState({
     name: "",
     description: "",
+    template_name: "research_assistant",
     files: [],
-    base_prompt: "",
-    query_templates: [""],
   });
 
-  // Effect for loading agents
-  React.useEffect(() => {
+  // Load agents when component mounts
+  useEffect(() => {
+    let mounted = true;
+
+    const loadAgents = async () => {
+      try {
+        setLoading(true);
+        const response = await fetch("/api/agents");
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Failed to load agents: ${errorText}`);
+        }
+
+        const data = await response.json();
+        console.log("Received agents data:", data);
+
+        if (mounted) {
+          setAgents(Array.isArray(data) ? data : []);
+          setError(null);
+        }
+      } catch (err) {
+        console.error("Error loading agents:", err);
+        if (mounted) {
+          setError(err.message);
+          setAgents([]);
+        }
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    };
+
     loadAgents();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
-  // Load agents list
-  const loadAgents = async () => {
-    try {
-      const response = await fetch("/api/agents");
-      const data = await response.json();
-      setAgents(data);
-    } catch (err) {
-      setError("Failed to load agents");
-      console.error("Error:", err);
-    }
-  };
-
-  // Handle agent creation
+  // Create new agent
   const handleCreateAgent = async (e) => {
     e.preventDefault();
-    setLoading(true);
-    setError(null);
-
-    const formData = new FormData();
-    formData.append("name", newAgent.name);
-    formData.append("description", newAgent.description);
-    formData.append("base_prompt", newAgent.base_prompt);
-
-    // Append files
-    for (let file of newAgent.files) {
-      formData.append("files[]", file);
-    }
-
-    // Append query templates
-    newAgent.query_templates.forEach((template, index) => {
-      formData.append(`query_template_${index}`, template);
-    });
-
     try {
+      setLoading(true);
+      setError(null);
+
+      const formData = new FormData();
+      formData.append("name", newAgent.name);
+      formData.append("description", newAgent.description);
+      formData.append("template_name", newAgent.template_name);
+
+      if (newAgent.files.length > 0) {
+        for (let file of newAgent.files) {
+          formData.append("files", file);
+        }
+      }
+
       const response = await fetch("/api/agents", {
         method: "POST",
         body: formData,
       });
 
-      const data = await response.json();
-      if (response.ok) {
-        await loadAgents();
-        setIsCreating(false);
-        setNewAgent({
-          name: "",
-          description: "",
-          files: [],
-          base_prompt: "",
-          query_templates: [""],
-        });
-      } else {
-        setError(data.error || "Failed to create agent");
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText);
       }
+
+      const data = await response.json();
+      setAgents((prev) => [...prev, data]);
+      setIsCreating(false);
+      setNewAgent({
+        name: "",
+        description: "",
+        template_name: "research_assistant",
+        files: [],
+      });
     } catch (err) {
-      setError("Error creating agent");
-      console.error("Error:", err);
+      console.error("Error creating agent:", err);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // Handle agent deletion
+  // Delete agent
   const handleDeleteAgent = async (name) => {
     if (!confirm(`Are you sure you want to delete agent "${name}"?`)) {
       return;
@@ -91,28 +111,31 @@ const AgentPool = () => {
         method: "DELETE",
       });
 
-      if (response.ok) {
-        await loadAgents();
-        // Remove from selected agents if it was selected
-        setSelectedAgents((prev) => prev.filter((a) => a.name !== name));
-      } else {
-        const data = await response.json();
-        setError(data.error || "Failed to delete agent");
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText);
       }
+
+      setAgents((prev) => prev.filter((a) => a.name !== name));
+      setSelectedAgents((prev) => prev.filter((a) => a.name !== name));
     } catch (err) {
-      setError("Error deleting agent");
-      console.error("Error:", err);
+      console.error("Error deleting agent:", err);
+      setError(err.message);
     }
   };
 
+  // Handle agent selection
   const handleAgentSelect = (agent) => {
-    if (selectedAgents.find((a) => a.name === agent.name)) {
-      setSelectedAgents((prev) => prev.filter((a) => a.name !== agent.name));
-    } else {
-      setSelectedAgents((prev) => [...prev, agent]);
-    }
+    setSelectedAgents((prev) => {
+      const isSelected = prev.find((a) => a.name === agent.name);
+      if (isSelected) {
+        return prev.filter((a) => a.name !== agent.name);
+      }
+      return [...prev, agent];
+    });
   };
 
+  // Start chat
   const startChat = async () => {
     if (selectedAgents.length === 0) {
       setError("Please select at least one agent");
@@ -127,18 +150,20 @@ const AgentPool = () => {
         },
         body: JSON.stringify({
           name: `Chat Room ${Date.now()}`,
-          agent_names: selectedAgents.map((agent) => agent.name),
+          agent_names: selectedAgents.map((a) => a.name),
         }),
       });
 
-      const data = await response.json();
-      if (response.ok) {
-        window.location.href = `/chat?room=${data.id}`;
-      } else {
-        setError(data.error || "Failed to create chat room");
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText);
       }
+
+      const data = await response.json();
+      window.location.href = `/chat?room=${data.id}`;
     } catch (err) {
-      setError("Error creating chat room");
+      console.error("Error creating chat room:", err);
+      setError(err.message);
     }
   };
 
@@ -151,14 +176,15 @@ const AgentPool = () => {
           <button
             onClick={() => setIsCreating(true)}
             className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+            disabled={loading}
           >
             Create New Agent
           </button>
           <button
             onClick={startChat}
-            disabled={selectedAgents.length === 0}
+            disabled={selectedAgents.length === 0 || loading}
             className={`px-4 py-2 rounded ${
-              selectedAgents.length > 0
+              selectedAgents.length > 0 && !loading
                 ? "bg-blue-600 text-white hover:bg-blue-700"
                 : "bg-gray-300 text-gray-500 cursor-not-allowed"
             }`}
@@ -170,49 +196,71 @@ const AgentPool = () => {
 
       {/* Error Display */}
       {error && (
-        <div className="mb-6 p-4 bg-red-100 text-red-700 rounded">{error}</div>
+        <div className="mb-6 p-4 bg-red-100 text-red-700 rounded flex justify-between items-center">
+          <span>{error}</span>
+          <button
+            onClick={() => setError(null)}
+            className="text-red-500 hover:text-red-700"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Loading State */}
+      {loading && (
+        <div className="text-center py-8">
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent"></div>
+          <p className="mt-2 text-gray-600">Loading...</p>
+        </div>
       )}
 
       {/* Agents Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {agents.map((agent) => (
-          <div
-            key={agent.name}
-            className={`border rounded-lg p-6 transition-all cursor-pointer
-              ${
-                selectedAgents.find((a) => a.name === agent.name)
-                  ? "border-blue-500 shadow-lg bg-blue-50"
-                  : "hover:shadow-lg"
-              }`}
-            onClick={() => handleAgentSelect(agent)}
-          >
-            <h3 className="text-xl font-semibold mb-2">{agent.name}</h3>
-            <p className="text-gray-600 mb-4">{agent.description}</p>
-            <div className="text-sm text-gray-500 mb-4">
-              Created: {new Date(agent.created_at).toLocaleDateString()}
-            </div>
-            <div className="flex justify-end space-x-2">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDeleteAgent(agent.name);
-                }}
-                className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200"
+      {!loading && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {agents.length > 0 ? (
+            agents.map((agent) => (
+              <div
+                key={agent.name}
+                className={`border rounded-lg p-6 transition-all cursor-pointer ${
+                  selectedAgents.find((a) => a.name === agent.name)
+                    ? "border-blue-500 shadow-lg bg-blue-50"
+                    : "hover:shadow-lg"
+                }`}
+                onClick={() => handleAgentSelect(agent)}
               >
-                Delete
-              </button>
+                <h3 className="text-xl font-semibold mb-2">{agent.name}</h3>
+                <p className="text-gray-600 mb-4">{agent.description}</p>
+                <div className="text-sm text-gray-500 mb-4">
+                  Created: {new Date(agent.created_at).toLocaleDateString()}
+                </div>
+                <div className="flex justify-end space-x-2">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteAgent(agent.name);
+                    }}
+                    className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="col-span-3 text-center py-8 text-gray-500">
+              No agents available
             </div>
-          </div>
-        ))}
-      </div>
+          )}
+        </div>
+      )}
 
-      {/* Create Agent Form Modal */}
+      {/* Create Agent Modal */}
       {isCreating && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg max-w-2xl w-full p-6">
             <h2 className="text-xl font-bold mb-4">Create New Agent</h2>
             <form onSubmit={handleCreateAgent} className="space-y-4">
-              {/* Name Input */}
               <div>
                 <label className="block text-sm font-medium mb-1">Name</label>
                 <input
@@ -226,7 +274,6 @@ const AgentPool = () => {
                 />
               </div>
 
-              {/* Description Input */}
               <div>
                 <label className="block text-sm font-medium mb-1">
                   Description
@@ -241,10 +288,28 @@ const AgentPool = () => {
                 />
               </div>
 
-              {/* File Upload */}
               <div>
                 <label className="block text-sm font-medium mb-1">
-                  Knowledge Files
+                  Template
+                </label>
+                <select
+                  value={newAgent.template_name}
+                  onChange={(e) =>
+                    setNewAgent({ ...newAgent, template_name: e.target.value })
+                  }
+                  className="w-full p-2 border rounded"
+                  required
+                >
+                  <option value="research_assistant">Research Assistant</option>
+                  <option value="general_qa">QA Agent</option>
+                  <option value="content_writer">Content Writer</option>
+                  <option value="market_analyst">Market Analyst</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Knowledge Files (Optional)
                 </label>
                 <input
                   type="file"
@@ -252,86 +317,15 @@ const AgentPool = () => {
                   onChange={(e) =>
                     setNewAgent({
                       ...newAgent,
-                      files: Array.from(e.target.files),
+                      files: Array.from(e.target.files || []),
                     })
                   }
                   className="w-full p-2 border rounded"
                   accept=".txt,.pdf,.doc,.docx"
-                  required
                 />
               </div>
 
-              {/* Base Prompt */}
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Base Prompt
-                </label>
-                <textarea
-                  value={newAgent.base_prompt}
-                  onChange={(e) =>
-                    setNewAgent({ ...newAgent, base_prompt: e.target.value })
-                  }
-                  className="w-full p-2 border rounded h-32"
-                  placeholder="Enter the base prompt for this agent..."
-                  required
-                />
-              </div>
-
-              {/* Query Templates */}
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Query Templates
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setNewAgent({
-                        ...newAgent,
-                        query_templates: [...newAgent.query_templates, ""],
-                      })
-                    }
-                    className="ml-2 px-2 py-1 text-sm bg-gray-100 rounded hover:bg-gray-200"
-                  >
-                    + Add Template
-                  </button>
-                </label>
-                {newAgent.query_templates.map((template, index) => (
-                  <div key={index} className="flex mb-2">
-                    <textarea
-                      value={template}
-                      onChange={(e) => {
-                        const newTemplates = [...newAgent.query_templates];
-                        newTemplates[index] = e.target.value;
-                        setNewAgent({
-                          ...newAgent,
-                          query_templates: newTemplates,
-                        });
-                      }}
-                      className="flex-1 p-2 border rounded"
-                      placeholder={`Query template ${index + 1}`}
-                    />
-                    {newAgent.query_templates.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const newTemplates = newAgent.query_templates.filter(
-                            (_, i) => i !== index
-                          );
-                          setNewAgent({
-                            ...newAgent,
-                            query_templates: newTemplates,
-                          });
-                        }}
-                        className="ml-2 px-2 text-red-600 hover:text-red-800"
-                      >
-                        ×
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {/* Form Buttons */}
-              <div className="flex justify-end space-x-2">
+              <div className="flex justify-end space-x-2 mt-6">
                 <button
                   type="button"
                   onClick={() => setIsCreating(false)}
@@ -341,8 +335,8 @@ const AgentPool = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
                   disabled={loading}
+                  className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400"
                 >
                   {loading ? "Creating..." : "Create Agent"}
                 </button>
@@ -355,5 +349,8 @@ const AgentPool = () => {
   );
 };
 
-// Render the app
-ReactDOM.render(<AgentPool />, document.getElementById("root"));
+// 只在根元素存在時進行渲染
+const rootElement = document.getElementById("root");
+if (rootElement) {
+  ReactDOM.render(<App />, rootElement);
+}

@@ -1,0 +1,23 @@
+{
+  "name": "market_analyst",
+  "class_path": "agents.market_analyst.MarketAnalystAgent",
+  "description": "市場分析專家，提供市場研究和產業分析",
+  "type": "analysis",
+  "base_prompt": "你是一個專業的市場分析師，擅長分析市場趨勢和產業動態。請根據提供的資料，生成專業的市場分析報告。",
+  "parameters": {
+    "prompt_style": "professional",
+    "output_format": "markdown",
+    "max_knowledge_items": 6,
+    "similarity_threshold": 0.65,
+    "include_sources": true,
+    "temperature": 0.6,
+    "analysis_depth": "comprehensive"
+  },
+  "required_inputs": ["industry", "analysis_focus", "time_period"],
+  "knowledge_config": {
+    "embedding_type": "text",
+    "chunk_size": 1000,
+    "use_embeddings": true,
+    "max_sources": 6
+  }
+}

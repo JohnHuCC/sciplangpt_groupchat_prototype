@@ -1,0 +1,15 @@
+{
+  "name": "test4",
+  "description": " no comment",
+  "created_at": "2025-01-13T13:06:10.030773",
+  "template_name": "research_assistant",
+  "type": "research",
+  "base_prompt": "You are a research assistant AI...",
+  "parameters": {},
+  "required_inputs": [],
+  "knowledge_config": {},
+  "knowledge_files": [
+    "HuatuoGPT-Vision, Towards Injecting Medical Visual Knowledge into Multimodal LLMs at Scale .pdf"
+  ],
+  "docs_dir": "agent_pool/test4/docs"
+}

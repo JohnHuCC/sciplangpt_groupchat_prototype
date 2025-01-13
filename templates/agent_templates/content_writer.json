@@ -1,0 +1,23 @@
+{
+  "name": "content_writer",
+  "class_path": "agents.content_writer.ContentWriterAgent",
+  "description": "專業內容寫手，可以生成各種類型的文章和內容",
+  "type": "writing",
+  "base_prompt": "你是一個專業的內容創作者，能夠根據主題和風格要求生成高質量的內容。請參考提供的資料，創作出符合要求的內容。",
+  "parameters": {
+    "prompt_style": "creative",
+    "output_format": "markdown",
+    "max_knowledge_items": 4,
+    "similarity_threshold": 0.5,
+    "include_sources": false,
+    "temperature": 0.8,
+    "writing_style": "engaging"
+  },
+  "required_inputs": ["topic", "content_type", "target_audience"],
+  "knowledge_config": {
+    "embedding_type": "text",
+    "chunk_size": 800,
+    "use_embeddings": true,
+    "max_sources": 4
+  }
+}

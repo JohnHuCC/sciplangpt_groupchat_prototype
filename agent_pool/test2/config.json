@@ -1,0 +1,18 @@
+{
+  "name": "test2",
+  "description": "no comment",
+  "created_at": "2025-01-13T12:05:35.544260",
+  "template_name": "research_assistant",
+  "type": "research",
+  "base_prompt": "You are a research assistant AI...",
+  "parameters": {},
+  "required_inputs": [],
+  "knowledge_config": {},
+  "knowledge_files": [
+    "10.1016_J.JCOL.2017.10.002.pdf",
+    "10.1038_s41598-018-27179-6.pdf",
+    "10.1038_srep31771.pdf",
+    "10.1039_d0lc00672f.pdf"
+  ],
+  "docs_dir": "agent_pool/test2/docs"
+}

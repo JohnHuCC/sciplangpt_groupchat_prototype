@@ -1,0 +1,19 @@
+{
+  "name": "test8",
+  "description": "no comment",
+  "created_at": "2025-01-13T14:54:14.511517",
+  "template_name": "research_assistant",
+  "type": "research",
+  "base_prompt": "You are a research assistant AI...",
+  "parameters": {},
+  "required_inputs": [],
+  "knowledge_config": {},
+  "knowledge_files": [
+    "1-s2.0-S0142961222002137-main.pdf",
+    "1-s2.0-S246820202030070X-main copy.pdf",
+    "1-s2.0-S246820202030070X-main.pdf",
+    "1-s2.0-S0956566321001937-main.pdf",
+    "1-s2.0-S1673852721000941-main.pdf"
+  ],
+  "docs_dir": "agent_pool/test8/docs"
+}
