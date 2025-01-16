@@ -10,7 +10,6 @@ import create_embedding
 from agents.base_agent import BaseAgent
 from pydantic import BaseModel, Field
 
-# 設置日誌
 logger = logging.getLogger(__name__)
 
 class AgentConfig(BaseModel):
@@ -96,7 +95,7 @@ class AgentPoolManager:
             for file_path in knowledge_files:
                 if os.path.exists(file_path):
                     shutil.copy2(file_path, str(docs_dir))
-                
+                    
             # 生成 embeddings
             if not await self.ensure_embeddings(docs_dir):
                 raise HTTPException(
@@ -163,7 +162,6 @@ class AgentPoolManager:
                 logger.error(f"Error reading config file for agent {name}: {str(e)}")
                 return None
 
-            # 建立回傳的配置字典，只包含必要且可序列化的資料
             safe_config = {
                 "name": config.get("name", name),
                 "description": config.get("description", ""),
@@ -175,7 +173,8 @@ class AgentPoolManager:
                     if isinstance(v, (str, int, float, bool, list, dict)) and k != "client"
                 },
                 "docs_dir": str(config.get("docs_dir", str(agent_dir / "docs"))),
-                "knowledge_files": config.get("knowledge_files", [])
+                "knowledge_files": config.get("knowledge_files", []),
+                "query_templates": config.get("query_templates", [])
             }
 
             logger.info(f"Successfully prepared configuration for agent {name}")
@@ -185,65 +184,44 @@ class AgentPoolManager:
             logger.error(f"Error getting agent configuration for {name}: {str(e)}")
             return None
         
-    # 在 get_agent_instance 中添加配置驗證
     async def get_agent_instance(self, name: str) -> Optional[BaseAgent]:
+        """獲取 agent 實例"""
         try:
             logger.info(f"Getting agent instance: {name}")
-            agent_dir = self.base_dir / name
-            config_path = agent_dir / "config.json"
+            config = await self.get_agent(name)
             
-            if not config_path.exists():
-                logger.error(f"Config file not found for agent {name}")
+            if not config:
+                logger.error(f"Config not found for agent {name}")
                 return None
                     
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                logger.info(f"Loaded config for agent {name}: {config}")
-            
-            # 驗證必要的配置欄位
-            required_fields = ["name", "base_prompt"]
-            missing_fields = [field for field in required_fields if field not in config]
-            if missing_fields:
-                logger.error(f"Missing required fields in config: {missing_fields}")
-                return None
-            
-            if not config.get("base_prompt"):
-                logger.error("base_prompt is empty in config")
-                return None
-
-            docs_dir = config.get('docs_dir') or str(agent_dir / "docs")
-            
-            # 確保 embedding 存在
-            if not await self.ensure_embeddings(docs_dir):
-                logger.warning(f"Failed to ensure embeddings for agent {name}")
-            
             try:
-                # 添加更多日誌來追蹤 agent 創建過程
-                logger.info(f"Creating agent with config: {json.dumps(config, indent=2)}")
-                
+                # 根據 agent 類型創建實例
                 agent_class = None
-                if config.get("type") == "question_based_research":
-                    logger.info("Creating QuestionBasedResearchAgent")
+                if config.get("type") == "question_based":
                     from agents.question_based_agent import QuestionBasedResearchAgent
                     agent_class = QuestionBasedResearchAgent
+                    # 在創建 QuestionBasedResearchAgent 時傳入 query_templates
+                    agent = agent_class(
+                        name=config["name"],
+                        base_prompt=config["base_prompt"],
+                        docs_dir=config["docs_dir"],
+                        parameters=config.get("parameters", {}),
+                        query_templates=config.get("query_templates", [])
+                    )
                 else:
-                    logger.info("Creating DynamicAgent")
                     from agents.dynamic_agent import DynamicAgent
                     agent_class = DynamicAgent
+                    # 創建 DynamicAgent 時不傳入 query_templates
+                    agent = agent_class(
+                        name=config["name"],
+                        base_prompt=config["base_prompt"],
+                        docs_dir=config["docs_dir"],
+                        parameters=config.get("parameters", {})
+                    )
                 
-                # 創建 agent 實例
-                agent = agent_class(
-                    name=config["name"],
-                    base_prompt=config["base_prompt"],
-                    docs_dir=docs_dir,
-                    parameters=config.get("parameters", {})
-                )
+                # 初始化 embedding
+                await self.ensure_embeddings(config["docs_dir"])
                 
-                # 驗證創建的 agent 實例
-                if not hasattr(agent, 'process_query'):
-                    logger.error("Created agent instance does not have process_query method")
-                    return None
-                    
                 logger.info(f"Successfully created agent instance: {agent}")
                 return agent
                 
@@ -252,12 +230,10 @@ class AgentPoolManager:
                 return None
             except Exception as e:
                 logger.error(f"Error creating agent instance: {str(e)}")
-                logger.exception("Stack trace:")  # 添加堆疊追蹤
                 return None
                 
         except Exception as e:
             logger.error(f"Error getting agent: {str(e)}")
-            logger.exception("Stack trace:")  # 添加堆疊追蹤
             return None
     
     async def list_agents(self) -> List[Dict]:
@@ -265,7 +241,6 @@ class AgentPoolManager:
         try:
             agents = await self._read_agents_file()
             logger.info(f"Listed {len(agents)} agents")
-            # 確保回傳的是正確的格式
             formatted_agents = []
             for agent in agents:
                 if isinstance(agent, dict):
@@ -275,7 +250,6 @@ class AgentPoolManager:
                         "created_at": agent.get("created_at", ""),
                         "type": agent.get("type", "")
                     })
-                # 如果是 Agent model 實例
                 elif isinstance(agent, Agent):
                     formatted_agents.append({
                         "name": agent.name,

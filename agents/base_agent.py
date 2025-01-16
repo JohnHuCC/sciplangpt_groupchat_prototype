@@ -1,8 +1,10 @@
 import logging
 from openai import AsyncOpenAI
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from concurrent.futures import ThreadPoolExecutor
 import os
+import numpy as np
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,12 @@ class BaseAgent:
             "model": "gpt-4",
             "temperature": self.parameters.get("temperature", 0.7)
         }
+        
+        # 鏈式調用和 embedding 相關屬性
+        self.next_agent = None
+        self.knowledge_embedding = None
+        self.embedding_model = parameters.get("embedding_model", "text-embedding-ada-002")
+        
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._validate_config(self.llm_config)
         self._initialize_client()
@@ -53,6 +61,31 @@ class BaseAgent:
         missing_keys = [key for key in required_keys if key not in llm_config]
         if missing_keys:
             raise ValueError(f"Missing required configuration keys: {missing_keys}")
+    
+    def set_next_agent(self, agent: 'BaseAgent') -> 'BaseAgent':
+        """設置下一個處理的 agent"""
+        self.next_agent = agent
+        return agent
+
+    async def create_embedding(self, text: str) -> Optional[np.ndarray]:
+        """創建文本的 embedding"""
+        try:
+            response = await self.client.embeddings.create(
+                model=self.embedding_model,
+                input=text
+            )
+            return np.array(response.data[0].embedding)
+        except Exception as e:
+            logger.error(f"Error creating embedding: {str(e)}")
+            return None
+
+    async def initialize_knowledge_embedding(self, knowledge_text: str):
+        """初始化 agent 的知識 embedding"""
+        try:
+            self.knowledge_embedding = await self.create_embedding(knowledge_text)
+            logger.info(f"Successfully initialized knowledge embedding for agent {self.name}")
+        except Exception as e:
+            logger.error(f"Failed to initialize knowledge embedding: {str(e)}")
             
     async def _create_chat_completion_async(self, messages: list, 
                                           temperature: Optional[float] = None) -> str:
@@ -69,6 +102,64 @@ class BaseAgent:
         except Exception as e:
             logger.error(f"Failed to create chat completion: {str(e)}")
             raise RuntimeError(f"Failed to create chat completion: {str(e)}")
+    
+    async def process_query(self, message: str, context: Optional[Dict] = None) -> Dict:
+        """處理查詢並轉發給下一個 agent"""
+        try:
+            # 初始化或獲取訊息追蹤列表
+            message_trail = context.get('message_trail', []) if context else []
+            
+            # 處理當前消息
+            current_result = await self._process_message(message, context)
+            
+            # 記錄當前處理結果
+            current_step = {
+                "agent_name": self.name,
+                "input": message,
+                "output": current_result,
+                "timestamp": datetime.now().isoformat()
+            }
+            message_trail.append(current_step)
+            
+            response = {
+                "agent": self.name,
+                "content": current_result,
+                "status": "completed",
+                "timestamp": datetime.now().isoformat(),
+                "message_trail": message_trail  # 添加訊息追蹤
+            }
+
+            # 如果有下一個 agent，繼續處理
+            if self.next_agent:
+                try:
+                    # 更新 context 中的 message_trail
+                    context = context or {}
+                    context['message_trail'] = message_trail
+                    
+                    next_result = await self.next_agent.process_query(current_result, context)
+                    response["next_agent_result"] = next_result
+                    # 合併下一個 agent 的訊息追蹤
+                    if "message_trail" in next_result:
+                        response["message_trail"] = next_result["message_trail"]
+                except Exception as e:
+                    logger.error(f"Error in next agent {self.next_agent.name}: {str(e)}")
+                    response["next_agent_error"] = str(e)
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error processing query in agent {self.name}: {str(e)}")
+            return {
+                "agent": self.name,
+                "error": str(e),
+                "status": "error",
+                "timestamp": datetime.now().isoformat(),
+                "message_trail": message_trail
+            }
+
+    async def _process_message(self, message: str, context: Optional[Dict] = None) -> str:
+        """實際處理消息的方法，子類需要實現此方法"""
+        raise NotImplementedError("Subclasses must implement _process_message method")
     
     def _format_prompt(self, base_prompt: str) -> str:
         """根據參數格式化提示文本"""
@@ -110,14 +201,13 @@ class BaseAgent:
     
     def to_dict(self) -> Dict:
         """Convert agent instance to dictionary representation"""
-        # 只返回可序列化的資料
         return {
             "name": self.name,
             "base_prompt": self.base_prompt,
             "docs_dir": self.docs_dir,
-            "parameters": self.parameters.copy(),  # 使用 copy 避免修改原始數據
-            "type": self.__class__.__name__,  # 添加類型資訊
-            "created_at": datetime.now().isoformat()  # 添加創建時間
+            "parameters": self.parameters.copy(),
+            "type": self.__class__.__name__,
+            "created_at": datetime.now().isoformat()
         }
     
     @classmethod

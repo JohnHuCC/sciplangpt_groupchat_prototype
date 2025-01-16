@@ -214,7 +214,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
 async def handle_chat_message(websocket: WebSocket, room_id: str, data: Dict):
     """處理聊天消息"""
     try:
-        # Create user message
+        # 創建用戶消息
         user_message = {
             "id": str(uuid.uuid4()),
             "sender": "user",
@@ -223,109 +223,145 @@ async def handle_chat_message(websocket: WebSocket, room_id: str, data: Dict):
         }
         chat_history[room_id].append(user_message)
 
-        # Broadcast user message
         await manager.broadcast({
             "type": "message",
             "message": user_message
         }, room_id)
 
-        # Get agents and send initial loading messages
+        # 獲取房間信息
         room = chat_rooms.get(room_id)
         if not room:
             logger.error(f"Room {room_id} not found")
             return
 
-        # 為每個 agent 發送一個 loading 消息
-        loading_messages = {}
+        # 準備 agent 序列並顯示處理順序
+        agent_sequence = []
+        agent_names = []
         for agent_data in room["agents"]:
             agent_name = agent_data["name"]
-            message_id = str(uuid.uuid4())
-            loading_messages[agent_name] = message_id
+            agent_names.append(agent_name)
+            agent = await agent_pool.get_agent_instance(agent_name)
+            if agent:
+                if agent_sequence:
+                    agent_sequence[-1].set_next_agent(agent)
+                agent_sequence.append(agent)
 
-            loading_message = {
-                "id": message_id,
-                "sender": agent_name,
-                "content": "思考中...",
-                "timestamp": datetime.now().isoformat(),
-                "status": "loading"
-            }
-            await manager.broadcast({
-                "type": "message",
-                "message": loading_message
-            }, room_id)
+        if not agent_sequence:
+            logger.error("No valid agents found")
+            return
 
-        # Process messages with agents
-        agent_tasks = []
-        for agent_data in room["agents"]:
-            try:
-                agent_name = agent_data["name"]
-                agent_instance = await agent_pool.get_agent_instance(agent_name)
-                if agent_instance is None:
-                    logger.error(f"Could not get instance for agent {agent_name}")
-                    continue
+        # 發送處理開始消息
+        processing_start = {
+            "id": str(uuid.uuid4()),
+            "sender": "system",
+            "content": f"開始處理訊息...\n處理順序: {' -> '.join(agent_names)}",
+            "timestamp": datetime.now().isoformat(),
+            "status": "processing"
+        }
+        await manager.broadcast({
+            "type": "message",
+            "message": processing_start
+        }, room_id)
 
-                task = asyncio.create_task(process_agent_message(
-                    agent_instance,
-                    agent_name,
-                    data.get("message", ""),
-                    chat_history[room_id]
-                ))
-                agent_tasks.append((agent_name, task))
-            except Exception as e:
-                logger.error(f"Error setting up agent {agent_name}: {str(e)}")
-                continue
+        # 開始處理
+        context = {
+            "room_id": room_id,
+            "history": chat_history[room_id]
+        }
+        
+        response = await agent_sequence[0].process_query(
+            data.get("message", ""),
+            context
+        )
 
-        # Process each agent's response
-        # Process each agent's response
-        for agent_name, task in agent_tasks:
-            try:
-                response = await task
-                logger.info(f"Got response from task for agent {agent_name}: {response}")
-                
-                agent_message = {
+        # 顯示訊息傳遞過程
+        if "message_trail" in response:
+            for i, step in enumerate(response["message_trail"]):
+                # 顯示當前 agent 收到的輸入
+                input_message = {
                     "id": str(uuid.uuid4()),
-                    "reply_to": loading_messages.get(agent_name),
-                    "sender": agent_name,
-                    "content": response.get("content", "No response content"),
-                    "used_knowledge": response.get("used_knowledge", []),
-                    "timestamp": datetime.now().isoformat(),
-                    "status": response.get("status", "completed")
-                }
-
-                # 如果發生錯誤，修改消息狀態
-                if response.get("error"):
-                    agent_message["status"] = "error"
-                    agent_message["error"] = response.get("error")
-
-                chat_history[room_id].append(agent_message)
-
-                await manager.broadcast({
-                    "type": "message",
-                    "message": agent_message
-                }, room_id)
-                logger.info(f"Broadcasted message for agent {agent_name}")
-                
-            except Exception as e:
-                logger.error(f"Error processing agent {agent_name} response: {str(e)}")
-                error_message = {
-                    "id": str(uuid.uuid4()),
-                    "reply_to": loading_messages.get(agent_name),
-                    "sender": agent_name,
-                    "content": f"Error: {str(e)}",
-                    "timestamp": datetime.now().isoformat(),
-                    "status": "error"
+                    "sender": "system",
+                    "content": f"[{step['agent_name']} 接收到的輸入]\n{step['input']}",
+                    "timestamp": step["timestamp"],
+                    "is_trail": True,
+                    "type": "input"
                 }
                 await manager.broadcast({
                     "type": "message",
-                    "message": error_message
+                    "message": input_message
                 }, room_id)
+
+                # 顯示當前 agent 的處理結果
+                output_message = {
+                    "id": str(uuid.uuid4()),
+                    "sender": "system",
+                    "content": f"[{step['agent_name']} 的處理結果]\n{step['output']}",
+                    "timestamp": step["timestamp"],
+                    "is_trail": True,
+                    "type": "output"
+                }
+                await manager.broadcast({
+                    "type": "message",
+                    "message": output_message
+                }, room_id)
+
+                # 如果不是最後一個 agent，顯示訊息傳遞
+                if i < len(response["message_trail"]) - 1:
+                    next_agent = response["message_trail"][i + 1]["agent_name"]
+                    transfer_message = {
+                        "id": str(uuid.uuid4()),
+                        "sender": "system",
+                        "content": f"↓ 訊息傳遞給 {next_agent} ↓",
+                        "timestamp": step["timestamp"],
+                        "is_trail": True,
+                        "type": "transfer"
+                    }
+                    await manager.broadcast({
+                        "type": "message",
+                        "message": transfer_message
+                    }, room_id)
+
+        # 發送最終結果
+        final_message = {
+            "id": str(uuid.uuid4()),
+            "sender": agent_sequence[-1].name,
+            "content": response.get("content", "沒有回應內容"),
+            "timestamp": datetime.now().isoformat(),
+            "status": "completed"
+        }
+
+        chat_history[room_id].append(final_message)
+        await manager.broadcast({
+            "type": "message",
+            "message": final_message
+        }, room_id)
+
+        # 發送處理完成消息
+        processing_complete = {
+            "id": str(uuid.uuid4()),
+            "sender": "system",
+            "content": "處理完成",
+            "timestamp": datetime.now().isoformat(),
+            "status": "completed"
+        }
+        await manager.broadcast({
+            "type": "message",
+            "message": processing_complete
+        }, room_id)
+
     except Exception as e:
         logger.error(f"Error handling chat message: {str(e)}")
-        if websocket.client_state == WebSocketState.CONNECTED:
-            await websocket.send_json({
-                "type": "error",
-                "message": f"Error processing message: {str(e)}"
-            })
+        error_message = {
+            "id": str(uuid.uuid4()),
+            "sender": "system",
+            "content": f"處理訊息時發生錯誤: {str(e)}",
+            "timestamp": datetime.now().isoformat(),
+            "status": "error"
+        }
+        await manager.broadcast({
+            "type": "message",
+            "message": error_message
+        }, room_id)
 
 # REST endpoints
 @router.get("/chat")
