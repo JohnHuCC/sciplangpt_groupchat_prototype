@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 class BaseAgent:
     """Base class for all agents in the system"""
     def __init__(self, name: str, base_prompt: str, docs_dir: str, 
+                 description: str,
                  parameters: Dict[str, Any] = None,
                  llm_config: Optional[Dict[str, Any]] = None):
         # 參數驗證
@@ -24,6 +25,7 @@ class BaseAgent:
             raise ValueError("Parameters must be a dictionary")
             
         self.name = name
+        self.description = description
         self.base_prompt = base_prompt
         self.docs_dir = docs_dir
         self.parameters = parameters or {}
@@ -32,8 +34,8 @@ class BaseAgent:
             "temperature": self.parameters.get("temperature", 0.7)
         }
         
-        # 鏈式調用和 embedding 相關屬性
-        self.next_agent = None
+        # 新增的屬性
+        self.available_agents = {}  # 可用的其他 agents
         self.knowledge_embedding = None
         self.embedding_model = parameters.get("embedding_model", "text-embedding-ada-002")
         
@@ -41,7 +43,12 @@ class BaseAgent:
         self._validate_config(self.llm_config)
         self._initialize_client()
         logger.info(f"Successfully initialized agent {self.name}")
-    
+        
+    def register_available_agents(self, agents: Dict[str, 'BaseAgent']):
+        """註冊可用的其他 agents"""
+        self.available_agents = {name: agent for name, agent in agents.items() 
+                               if name != self.name}
+        
     def _initialize_client(self):
         """Initialize AsyncOpenAI client"""
         try:
@@ -61,11 +68,52 @@ class BaseAgent:
         missing_keys = [key for key in required_keys if key not in llm_config]
         if missing_keys:
             raise ValueError(f"Missing required configuration keys: {missing_keys}")
-    
-    def set_next_agent(self, agent: 'BaseAgent') -> 'BaseAgent':
-        """設置下一個處理的 agent"""
-        self.next_agent = agent
-        return agent
+            
+    async def decide_next_agent(self, message: str, current_result: str) -> Optional[str]:
+        """決定下一個處理的 agent"""
+        try:
+            if not self.available_agents:
+                return None
+
+            prompt = f"""基於當前的處理結果，決定下一步應該由哪個 agent 處理。請考慮每個 agent 的專長來做決定。
+
+    當前消息: {message}
+    當前處理結果: {current_result}
+
+    可用的 agents:
+    {chr(10).join([f"- {name}: {agent.description}" for name, agent in self.available_agents.items()])}
+
+    重要規則：
+    1. 除非真的完全不需要其他 agent 的專業知識，否則應該選擇一個最適合的 agent 繼續處理
+    2. 要充分利用每個 agent 的專長
+    3. 確保答案的完整性和全面性
+
+    請從上述 agents 中選擇一個最適合處理下一步的 agent。
+    只需要回答 agent 的名稱，如果確實不需要進一步處理才回答 "NONE"。"""
+
+            messages = [
+                {"role": "system", "content": "你是一個專業的任務分配器，需要確保工作流程的完整性和效率。"},
+                {"role": "user", "content": prompt}
+            ]
+            
+            response = await self._create_chat_completion_async(messages, temperature=0.3)
+            next_agent = response.strip()
+            
+            logger.info(f"Agent {self.name} decided next agent: {next_agent}")
+            
+            if next_agent == "NONE":
+                logger.warning(f"Agent {self.name} decided to end the chain. Available agents were: {list(self.available_agents.keys())}")
+                return None
+            elif next_agent in self.available_agents:
+                return next_agent
+            else:
+                logger.warning(f"Invalid next agent decision: {next_agent}")
+                # 如果決策無效，選擇第一個可用的 agent
+                return next(iter(self.available_agents))
+                
+        except Exception as e:
+            logger.error(f"Error deciding next agent: {str(e)}")
+            return None
 
     async def create_embedding(self, text: str) -> Optional[np.ndarray]:
         """創建文本的 embedding"""
@@ -102,11 +150,10 @@ class BaseAgent:
         except Exception as e:
             logger.error(f"Failed to create chat completion: {str(e)}")
             raise RuntimeError(f"Failed to create chat completion: {str(e)}")
-    
+            
     async def process_query(self, message: str, context: Optional[Dict] = None) -> Dict:
-        """處理查詢並轉發給下一個 agent"""
+        """處理查詢"""
         try:
-            # 初始化或獲取訊息追蹤列表
             message_trail = context.get('message_trail', []) if context else []
             
             # 處理當前消息
@@ -121,28 +168,31 @@ class BaseAgent:
             }
             message_trail.append(current_step)
             
+            # 決定下一個處理者
+            next_agent_name = await self.decide_next_agent(message, current_result)
+            current_step["next_agent"] = next_agent_name
+            
             response = {
                 "agent": self.name,
                 "content": current_result,
                 "status": "completed",
                 "timestamp": datetime.now().isoformat(),
-                "message_trail": message_trail  # 添加訊息追蹤
+                "message_trail": message_trail
             }
 
-            # 如果有下一個 agent，繼續處理
-            if self.next_agent:
+            # 如果有下一個處理者，繼續處理
+            if next_agent_name and next_agent_name in self.available_agents:
                 try:
-                    # 更新 context 中的 message_trail
+                    next_agent = self.available_agents[next_agent_name]
                     context = context or {}
                     context['message_trail'] = message_trail
                     
-                    next_result = await self.next_agent.process_query(current_result, context)
+                    next_result = await next_agent.process_query(current_result, context)
                     response["next_agent_result"] = next_result
-                    # 合併下一個 agent 的訊息追蹤
                     if "message_trail" in next_result:
                         response["message_trail"] = next_result["message_trail"]
                 except Exception as e:
-                    logger.error(f"Error in next agent {self.next_agent.name}: {str(e)}")
+                    logger.error(f"Error in next agent {next_agent_name}: {str(e)}")
                     response["next_agent_error"] = str(e)
             
             return response
@@ -156,7 +206,7 @@ class BaseAgent:
                 "timestamp": datetime.now().isoformat(),
                 "message_trail": message_trail
             }
-
+    
     async def _process_message(self, message: str, context: Optional[Dict] = None) -> str:
         """實際處理消息的方法，子類需要實現此方法"""
         raise NotImplementedError("Subclasses must implement _process_message method")
@@ -205,6 +255,7 @@ class BaseAgent:
             "name": self.name,
             "base_prompt": self.base_prompt,
             "docs_dir": self.docs_dir,
+            "description": self.description,
             "parameters": self.parameters.copy(),
             "type": self.__class__.__name__,
             "created_at": datetime.now().isoformat()
@@ -217,6 +268,7 @@ class BaseAgent:
             name=config["name"],
             base_prompt=config["base_prompt"],
             docs_dir=config["docs_dir"],
+            description=config.get("description", ""),
             parameters=config.get("parameters", {}),
             llm_config=config.get("llm_config")
         )

@@ -54,5 +54,17 @@
     "created_at": "2025-01-13T14:54:14.511517",
     "type": "research",
     "template_name": "research_assistant"
+  },
+  {
+    "name": "test9",
+    "description": "no comment ",
+    "created_at": "2025-01-16T12:41:34.790590",
+    "type": "dynamic"
+  },
+  {
+    "name": "test10",
+    "description": "5~8",
+    "created_at": "2025-01-16T12:56:29.309844",
+    "type": "dynamic"
   }
 ]

@@ -1,0 +1,16 @@
+{
+  "name": "test10",
+  "description": "5~8",
+  "created_at": "2025-01-16T12:56:29.309844",
+  "base_prompt": "You are a dynamic processing agent capable of handling various tasks.",
+  "type": "dynamic",
+  "template_name": "general_qa",
+  "parameters": {},
+  "knowledge_files": [
+    "document_20250113143202.pdf",
+    "document_20250113143340.pdf",
+    "document_20250113143413.pdf",
+    "document_20250113143419.pdf"
+  ],
+  "docs_dir": "agent_pool/test10/docs"
+}

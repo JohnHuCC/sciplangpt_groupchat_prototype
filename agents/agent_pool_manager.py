@@ -1,3 +1,5 @@
+# agent_pool_manager.py
+
 from fastapi import HTTPException
 import json
 import os
@@ -15,9 +17,38 @@ logger = logging.getLogger(__name__)
 class AgentConfig(BaseModel):
     name: str
     description: str
-    base_prompt: str
+    template_name: Optional[str] = None
+    base_prompt: str = Field(
+        default="You are a helpful AI assistant.",
+        description="Base prompt for the agent"
+    )
+    type: Optional[str] = Field(default="dynamic", description="Type of the agent")
     query_templates: List[str] = Field(default_factory=list)
-    type: Optional[str] = None
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+
+class AgentCreateBase(BaseModel):
+    name: str
+    description: str
+    template_name: Optional[str] = None
+    type: Optional[str] = "dynamic"
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+
+    def to_config(self) -> AgentConfig:
+        """Convert creation request to full configuration"""
+        base_prompts = {
+            "dynamic": "You are a dynamic processing agent capable of handling various tasks.",
+            "qa": "You are a specialized Q&A agent designed to provide accurate answers based on available knowledge.",
+            "research": "You are a research analysis agent focused on deep analysis and knowledge synthesis."
+        }
+        
+        return AgentConfig(
+            name=self.name,
+            description=self.description,
+            template_name=self.template_name,
+            base_prompt=base_prompts.get(self.type, base_prompts["dynamic"]),
+            type=self.type,
+            parameters=self.parameters
+        )
 
 class Agent(BaseModel):
     name: str
@@ -32,14 +63,14 @@ class AgentPoolManager:
         self._initialize_pool()
     
     def _initialize_pool(self) -> None:
-        """初始化 agent pool"""
+        """Initialize agent pool"""
         self.base_dir.mkdir(exist_ok=True)
         if not self.agents_file.exists():
             with open(self.agents_file, 'w', encoding='utf-8') as f:
                 json.dump([], f, ensure_ascii=False, indent=2)
                 
     async def _read_agents_file(self) -> List[Dict]:
-        """讀取 agents 文件"""
+        """Read agents file"""
         try:
             if not self.agents_file.exists():
                 return []
@@ -53,7 +84,7 @@ class AgentPoolManager:
             )
 
     async def _write_agents_file(self, agents: List[Dict]) -> None:
-        """寫入 agents 文件"""
+        """Write agents file"""
         try:
             with open(self.agents_file, 'w', encoding='utf-8') as f:
                 json.dump(agents, f, ensure_ascii=False, indent=2)
@@ -65,7 +96,7 @@ class AgentPoolManager:
             )
 
     async def ensure_embeddings(self, docs_dir: Union[str, Path]) -> bool:
-        """確保 embedding 文件存在"""
+        """Ensure embedding files exist"""
         try:
             docs_dir = Path(docs_dir)
             embedding_dir = docs_dir / "embedding"
@@ -77,12 +108,15 @@ class AgentPoolManager:
             logger.error(f"Error ensuring embeddings: {str(e)}")
             return False
     
-    async def create_agent(self, config: AgentConfig, knowledge_files: List[str]) -> Dict:
-        """創建新的 agent"""
+    async def create_agent(self, agent_data: AgentCreateBase, knowledge_files: List[str]) -> Dict:
+        """Create new agent"""
         try:
-            logger.info(f"Creating agent: {config.name}")
+            logger.info(f"Creating agent: {agent_data.name}")
             
-            # 創建 agent 專屬目錄
+            # Convert to full configuration
+            config = agent_data.to_config()
+            
+            # Create agent directory
             agent_dir = self.base_dir / config.name
             if agent_dir.exists():
                 raise HTTPException(status_code=400, detail=f"Agent '{config.name}' already exists")
@@ -91,26 +125,27 @@ class AgentPoolManager:
             docs_dir = agent_dir / "docs"
             docs_dir.mkdir()
             
-            # 複製知識文件
+            # Copy knowledge files
             for file_path in knowledge_files:
                 if os.path.exists(file_path):
                     shutil.copy2(file_path, str(docs_dir))
                     
-            # 生成 embeddings
+            # Generate embeddings
             if not await self.ensure_embeddings(docs_dir):
                 raise HTTPException(
                     status_code=500, 
                     detail=f"Failed to generate embeddings for agent {config.name}"
                 )
             
-            # 保存 agent 配置
+            # Save agent configuration
             agent_config = {
                 "name": config.name,
                 "description": config.description,
                 "created_at": datetime.now().isoformat(),
                 "base_prompt": config.base_prompt,
-                "query_templates": config.query_templates,
                 "type": config.type,
+                "template_name": config.template_name,
+                "parameters": config.parameters,
                 "knowledge_files": [os.path.basename(f) for f in knowledge_files],
                 "docs_dir": str(docs_dir)
             }
@@ -119,7 +154,7 @@ class AgentPoolManager:
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(agent_config, f, ensure_ascii=False, indent=2)
             
-            # 更新 agents 列表
+            # Update agents list
             agents = await self._read_agents_file()
             agents.append(Agent(
                 name=config.name,
@@ -136,12 +171,12 @@ class AgentPoolManager:
             raise
         except Exception as e:
             logger.error(f"Error creating agent: {str(e)}")
-            if agent_dir.exists():
+            if 'agent_dir' in locals() and agent_dir.exists():
                 shutil.rmtree(agent_dir)
             raise HTTPException(status_code=500, detail=str(e))
     
     async def get_agent(self, name: str) -> Optional[Dict[str, Any]]:
-        """獲取 agent 配置"""
+        """Get agent configuration"""
         try:
             logger.info(f"Getting agent configuration for: {name}")
             agent_dir = self.base_dir / name
@@ -166,12 +201,10 @@ class AgentPoolManager:
                 "name": config.get("name", name),
                 "description": config.get("description", ""),
                 "type": config.get("type", "dynamic"),
+                "template_name": config.get("template_name"),
                 "base_prompt": config.get("base_prompt", ""),
                 "created_at": config.get("created_at", datetime.now().isoformat()),
-                "parameters": {
-                    k: v for k, v in config.get("parameters", {}).items()
-                    if isinstance(v, (str, int, float, bool, list, dict)) and k != "client"
-                },
+                "parameters": config.get("parameters", {}),
                 "docs_dir": str(config.get("docs_dir", str(agent_dir / "docs"))),
                 "knowledge_files": config.get("knowledge_files", []),
                 "query_templates": config.get("query_templates", [])
@@ -185,7 +218,7 @@ class AgentPoolManager:
             return None
         
     async def get_agent_instance(self, name: str) -> Optional[BaseAgent]:
-        """獲取 agent 實例"""
+        """Get agent instance"""
         try:
             logger.info(f"Getting agent instance: {name}")
             config = await self.get_agent(name)
@@ -195,12 +228,11 @@ class AgentPoolManager:
                 return None
                     
             try:
-                # 根據 agent 類型創建實例
+                # Create instance based on agent type
                 agent_class = None
                 if config.get("type") == "question_based":
                     from agents.question_based_agent import QuestionBasedResearchAgent
                     agent_class = QuestionBasedResearchAgent
-                    # 在創建 QuestionBasedResearchAgent 時傳入 query_templates
                     agent = agent_class(
                         name=config["name"],
                         base_prompt=config["base_prompt"],
@@ -211,7 +243,6 @@ class AgentPoolManager:
                 else:
                     from agents.dynamic_agent import DynamicAgent
                     agent_class = DynamicAgent
-                    # 創建 DynamicAgent 時不傳入 query_templates
                     agent = agent_class(
                         name=config["name"],
                         base_prompt=config["base_prompt"],
@@ -219,7 +250,7 @@ class AgentPoolManager:
                         parameters=config.get("parameters", {})
                     )
                 
-                # 初始化 embedding
+                # Initialize embedding
                 await self.ensure_embeddings(config["docs_dir"])
                 
                 logger.info(f"Successfully created agent instance: {agent}")
@@ -237,7 +268,7 @@ class AgentPoolManager:
             return None
     
     async def list_agents(self) -> List[Dict]:
-        """列出所有 agents"""
+        """List all agents"""
         try:
             agents = await self._read_agents_file()
             logger.info(f"Listed {len(agents)} agents")
@@ -260,22 +291,19 @@ class AgentPoolManager:
             return formatted_agents
         except Exception as e:
             logger.error(f"Error listing agents: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error listing agents: {str(e)}"
-            )
+            raise HTTPException(status_code=500, detail=f"Error listing agents: {str(e)}")
         
     async def delete_agent(self, name: str) -> bool:
-        """刪除指定的 agent"""
+        """Delete specified agent"""
         try:
             agent_dir = self.base_dir / name
             if not agent_dir.exists():
                 return False
                 
-            # 刪除 agent 目錄及其所有內容
+            # Delete agent directory and all contents
             shutil.rmtree(agent_dir)
             
-            # 更新 agents 列表
+            # Update agents list
             agents = await self._read_agents_file()
             agents = [a for a in agents if a["name"] != name]
             await self._write_agents_file(agents)
@@ -287,7 +315,7 @@ class AgentPoolManager:
             raise HTTPException(status_code=500, detail=f"Error deleting agent: {str(e)}")
     
     async def update_agent(self, name: str, updates: Dict) -> Optional[Dict]:
-        """更新 agent 配置"""
+        """Update agent configuration"""
         try:
             agent_dir = self.base_dir / name
             config_path = agent_dir / "config.json"

@@ -1,30 +1,27 @@
+# agent_routes.py
+
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, WebSocket
 from fastapi.responses import JSONResponse, FileResponse
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 import os
 import logging
-from agents.agent_pool_manager import AgentPoolManager, AgentConfig
+from agents.agent_pool_manager import AgentPoolManager, AgentConfig, AgentCreateBase
 from utils.template_manager import TemplateManager
+import json
 
-# 設置日誌
+# Set up logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 agent_pool = AgentPoolManager()
 template_manager = TemplateManager()
 
-# 確保上傳目錄存在
+# Ensure upload directory exists
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Pydantic models for request/response validation
-class AgentCreate(BaseModel):
-    name: str
-    description: str
-    template_name: str
-    parameters: Dict[str, Any] = {}
-
 class AgentQuery(BaseModel):
     query: str
     parameters: Optional[Dict[str, Any]] = None
@@ -59,16 +56,15 @@ class WebSocketManager:
                 logger.error(f"Error broadcasting to client {client_id}: {str(e)}")
                 disconnected_clients.append(client_id)
         
-        # 清理斷開的連接
         for client_id in disconnected_clients:
             self.disconnect(client_id)
 
 ws_manager = WebSocketManager()
 
-# Template 相關路由
+# Template related routes
 @router.get("/api/templates")
 async def list_templates():
-    """列出所有可用的 agent 模板"""
+    """List all available agent templates"""
     try:
         templates = await template_manager.list_templates()
         return JSONResponse(content=templates)
@@ -78,7 +74,7 @@ async def list_templates():
 
 @router.get("/api/templates/{template_name}")
 async def get_template(template_name: str):
-    """獲取指定模板的詳細信息"""
+    """Get detailed information for specified template"""
     try:
         template = await template_manager.load_template(template_name)
         return JSONResponse(content=template)
@@ -106,12 +102,12 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 continue
 
             try:
-                agent = await agent_pool.get_agent(agent_name)
+                agent = await agent_pool.get_agent_instance(agent_name)
                 if not agent:
                     await websocket.send_json({"error": f"Agent {agent_name} not found"})
                     continue
 
-                # 處理查詢
+                # Handle query
                 if parameters:
                     original_parameters = agent.parameters.copy()
                     agent.parameters.update(parameters)
@@ -132,13 +128,12 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     finally:
         ws_manager.disconnect(client_id)
 
-# Agent 管理路由
+# Agent CRUD operations
 @router.get("/api/agents")
 async def list_agents():
-    """獲取所有 agents 列表"""
+    """List all agents"""
     try:
-        agents = await agent_pool.list_agents()
-        return JSONResponse(content=agents)
+        return await agent_pool.list_agents()
     except Exception as e:
         logger.error(f"Error listing agents: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -148,89 +143,53 @@ async def create_agent(
     name: str = Form(...),
     description: str = Form(...),
     template_name: str = Form(...),
-    files: Optional[List[UploadFile]] = File(None)
+    parameters: str = Form("{}"),  # JSON string
+    files: List[UploadFile] = File(default=[])
 ):
-    """創建新的 agent"""
+    """Create new agent"""
     try:
-        logger.info(f"Creating agent: {name} with template: {template_name}")
+        # Convert parameters from JSON string to dict
+        parameters_dict = json.loads(parameters)
         
-        # 載入模板
-        try:
-            template = await template_manager.load_template(template_name)
-            if not template:
-                raise ValueError(f"Template {template_name} not found")
-        except Exception as e:
-            logger.error(f"Error loading template: {str(e)}")
-            raise HTTPException(status_code=404, detail=f"Template {template_name} not found")
+        # Create AgentCreateBase object
+        agent_data = AgentCreateBase(
+            name=name,
+            description=description,
+            template_name=template_name,
+            parameters=parameters_dict
+        )
 
-        # 處理上傳的文件
-        uploaded_files = []
-        if files:
-            upload_dir = os.path.join(UPLOAD_FOLDER, name)
-            os.makedirs(upload_dir, exist_ok=True)
-            
-            for file in files:
-                try:
-                    file_path = os.path.join(upload_dir, file.filename)
+        # Save uploaded files
+        knowledge_files = []
+        for file in files:
+            file_path = f"{UPLOAD_FOLDER}/{file.filename}"
+            try:
+                with open(file_path, "wb") as buffer:
                     content = await file.read()
-                    with open(file_path, "wb") as f:
-                        f.write(content)
-                    uploaded_files.append(file_path)
-                    logger.info(f"Saved file: {file_path}")
-                except Exception as e:
-                    logger.error(f"Error saving file {file.filename}: {str(e)}")
-                    # 清理已上傳的文件
-                    for path in uploaded_files:
-                        try:
-                            os.remove(path)
-                        except:
-                            pass
-                    raise HTTPException(
-                        status_code=500, 
-                        detail=f"Error saving file {file.filename}: {str(e)}"
-                    )
-
-        # 創建 agent 配置
-        try:
-            agent_config = AgentConfig(
-                name=name,
-                description=description,
-                template_name=template_name,
-                type=template.type,  # 從模板中獲取類型
-                parameters={}  # 可以根據需要添加參數
-            )
-            
-            # 創建 agent
-            agent = await agent_pool.create_agent(agent_config, uploaded_files)
-            if not agent:
-                raise ValueError("Failed to create agent")
-                
-            return JSONResponse(content=agent)
-
-        except Exception as e:
-            logger.error(f"Error creating agent: {str(e)}")
-            # 清理上傳的文件
-            if uploaded_files:
-                upload_dir = os.path.join(UPLOAD_FOLDER, name)
-                if os.path.exists(upload_dir):
-                    import shutil
-                    shutil.rmtree(upload_dir)
-            raise HTTPException(status_code=500, detail=str(e))
-
-    except HTTPException:
-        raise
+                    buffer.write(content)
+                knowledge_files.append(file_path)
+            except Exception as e:
+                logger.error(f"Error saving file {file.filename}: {str(e)}")
+                continue
+        
+        # Create agent
+        result = await agent_pool.create_agent(agent_data, knowledge_files)
+        return result
     except Exception as e:
-        logger.error(f"Unexpected error creating agent: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error creating agent: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error creating agent: {str(e)}"
+        )
 
 @router.get("/api/agents/{name}")
 async def get_agent(name: str):
-    """獲取特定 agent 的詳細信息"""
+    """Get detailed information for specified agent"""
     try:
         agent = await agent_pool.get_agent(name)
         if not agent:
             raise HTTPException(status_code=404, detail=f"Agent {name} not found")
-        return JSONResponse(content=agent.to_dict())
+        return JSONResponse(content=agent)
     except HTTPException:
         raise
     except Exception as e:
@@ -239,13 +198,13 @@ async def get_agent(name: str):
 
 @router.delete("/api/agents/{name}")
 async def delete_agent(name: str):
-    """刪除指定的 agent"""
+    """Delete specified agent"""
     try:
         success = await agent_pool.delete_agent(name)
         if not success:
             raise HTTPException(status_code=404, detail=f"Agent {name} not found")
 
-        # 清理相關文件
+        # Clean up related files
         upload_dir = os.path.join(UPLOAD_FOLDER, name)
         if os.path.exists(upload_dir):
             import shutil
@@ -259,13 +218,13 @@ async def delete_agent(name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/api/agents/{name}")
-async def update_agent(name: str, updates: AgentCreate):
-    """更新 agent 配置"""
+async def update_agent(name: str, updates: AgentCreateBase):
+    """Update agent configuration"""
     try:
         agent = await agent_pool.update_agent(name, updates.dict())
         if not agent:
             raise HTTPException(status_code=404, detail=f"Agent {name} not found")
-        return JSONResponse(content=agent.to_dict())
+        return JSONResponse(content=agent)
     except HTTPException:
         raise
     except Exception as e:
@@ -274,7 +233,7 @@ async def update_agent(name: str, updates: AgentCreate):
 
 @router.get("/uploads/{filename}")
 async def download_file(filename: str):
-    """下載上傳的文件"""
+    """Download uploaded file"""
     file_path = os.path.join(UPLOAD_FOLDER, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail=f"File {filename} not found")

@@ -1,0 +1,16 @@
+{
+  "name": "test9",
+  "description": "no comment ",
+  "created_at": "2025-01-16T12:41:34.790590",
+  "base_prompt": "You are a dynamic processing agent capable of handling various tasks.",
+  "type": "dynamic",
+  "template_name": "research_assistant",
+  "parameters": {},
+  "knowledge_files": [
+    "document_20250110143605.pdf",
+    "document_20250110145127.pdf",
+    "document_20250110163035.pdf",
+    "document_20250113142838.pdf"
+  ],
+  "docs_dir": "agent_pool/test9/docs"
+}

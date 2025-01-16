@@ -1,19 +1,33 @@
 from typing import Dict, Any, List, Optional, Tuple
 import os
+import logging
 from fastapi import HTTPException
 from .base_agent import BaseAgent
 from utils.query_knowledge import query_knowledge_async
 import create_embedding
+
+logger = logging.getLogger(__name__)
 
 class DynamicAgent(BaseAgent):
     def __init__(self, 
                  name: str,
                  base_prompt: str,
                  docs_dir: str,
+                 description: str = "Dynamic processing agent for general tasks",
                  parameters: Dict[str, Any] = None,
                  llm_config: Optional[Dict[str, Any]] = None,
                  **kwargs):  # 添加 **kwargs 來接收額外的參數
-        super().__init__(name, base_prompt, docs_dir, parameters, llm_config)
+        super().__init__(
+            name=name,
+            base_prompt=base_prompt,
+            docs_dir=docs_dir,
+            description=description,
+            parameters=parameters,
+            llm_config=llm_config
+        )
+        
+        self.similarity_threshold = parameters.get("similarity_threshold", 0.0)
+        self.max_knowledge_items = parameters.get("max_knowledge_items", 3)
 
     async def _process_message(self, message: str, context: Optional[Dict] = None) -> str:
         """實現父類的抽象方法，處理具體的消息邏輯"""
@@ -40,13 +54,14 @@ class DynamicAgent(BaseAgent):
             return response
             
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
+            error_msg = f"Error processing message: {str(e)}"
+            logger.error(error_msg)
+            raise HTTPException(status_code=500, detail=error_msg)
 
     async def _query_knowledge_base(self, query: str, k: Optional[int] = None) -> Tuple[List[str], List[str], List[float]]:
         """包裝知識庫查詢的輔助函數"""
         try:
-            k = k or self.parameters.get("max_knowledge_items", 3)
-            similarity_threshold = self.parameters.get("similarity_threshold", 0.0)
+            k = k or self.max_knowledge_items
             
             texts, sources, scores = await create_embedding.query_index_async(
                 query=query,
@@ -54,11 +69,12 @@ class DynamicAgent(BaseAgent):
                 docs_dir=self.docs_dir
             )
             
-            if similarity_threshold > 0:
+            # 根據相似度閾值過濾結果
+            if self.similarity_threshold > 0:
                 filtered_results = [
                     (text, source, score)
                     for text, source, score in zip(texts, sources, scores)
-                    if score >= similarity_threshold
+                    if score >= self.similarity_threshold
                 ]
                 if filtered_results:
                     texts, sources, scores = zip(*filtered_results)
@@ -68,7 +84,7 @@ class DynamicAgent(BaseAgent):
             return texts, sources, scores
             
         except Exception as e:
-            print(f"Knowledge base query error: {str(e)}")
+            logger.error(f"Knowledge base query error: {str(e)}")
             return [], [], []
 
     def _format_knowledge_results(self, texts: List[str], sources: List[str], 
@@ -119,6 +135,7 @@ class DynamicAgent(BaseAgent):
             name=config["name"],
             base_prompt=config["base_prompt"],
             docs_dir=config["docs_dir"],
+            description=config.get("description", "Dynamic processing agent for general tasks"),
             parameters=config.get("parameters", {}),
             llm_config=config.get("llm_config")
         )

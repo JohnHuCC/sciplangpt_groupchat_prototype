@@ -10,36 +10,72 @@ import dotenv
 from openai import AsyncOpenAI
 import re
 from fastapi import HTTPException
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type
+)
+import asyncio
+import logging
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
+
+# Load environment variables
 dotenv.load_dotenv()
 
-# Set OpenAI API Key
-client = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+# Initialize OpenAI client with retry mechanism
+client = AsyncOpenAI(
+    api_key=os.getenv('OPENAI_API_KEY'),
+    timeout=60.0  # Increased timeout
+)
 
 # Constants
 EMBEDDING_MODEL = "text-embedding-3-large"
 EMBEDDING_SIZE = 3072
+MAX_RETRIES = 3
+CHUNK_BATCH_SIZE = 5
 
-# Text splitter
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+# Text splitter configuration
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=1000,
+    chunk_overlap=200,
+    separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
+)
 
 def preprocess_text(text: str) -> str:
     """Preprocess the text by removing references and citations."""
-    sections_to_remove = ['References', 'Bibliography', 'Citations', 'Works Cited', 
-                         'Acknowledgments', 'Appendix', 'Appendices']
-    
-    pattern = r'\n\s*(' + '|'.join(sections_to_remove) + r')\s*\n'
-    text = re.split(pattern, text, flags=re.IGNORECASE)[0]
-    text = re.sub(r'\([^)]*\b(?:et al\.,?\s*\d{4}|\d{4})[^)]*\)', '', text)
-    text = re.sub(r'\[\d+(?:-\d+)?\]', '', text)
-    text = re.sub(r'\^\d+', '', text)
-    text = re.sub(r'\s+', ' ', text)
-    return text.strip()
+    try:
+        sections_to_remove = [
+            'References', 'Bibliography', 'Citations', 'Works Cited', 
+            'Acknowledgments', 'Appendix', 'Appendices'
+        ]
+        
+        pattern = r'\n\s*(' + '|'.join(sections_to_remove) + r')\s*\n'
+        text = re.split(pattern, text, flags=re.IGNORECASE)[0]
+        text = re.sub(r'\([^)]*\b(?:et al\.,?\s*\d{4}|\d{4})[^)]*\)', '', text)
+        text = re.sub(r'\[\d+(?:-\d+)?\]', '', text)
+        text = re.sub(r'\^\d+', '', text)
+        text = re.sub(r'\s+', ' ', text)
+        return text.strip()
+    except Exception as e:
+        logger.error(f"Error in preprocess_text: {str(e)}")
+        return text
 
+@retry(
+    stop=stop_after_attempt(MAX_RETRIES),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    retry=retry_if_exception_type(Exception),
+    before_sleep=lambda retry_state: logger.info(f"Retrying after error: {retry_state.outcome.exception()}")
+)
 async def embed_text(text: str) -> Optional[np.ndarray]:
-    """Generate an embedding for a given text asynchronously."""
+    """Generate an embedding for a given text with retry mechanism."""
     if not text.strip():
-        print("Warning: Empty text provided for embedding")
+        logger.warning("Empty text provided for embedding")
         return None
         
     try:
@@ -51,8 +87,8 @@ async def embed_text(text: str) -> Optional[np.ndarray]:
         norm = np.linalg.norm(embedding)
         return embedding / norm if norm > 0 else None
     except Exception as e:
-        print(f"Error generating embedding: {str(e)}")
-        return None
+        logger.error(f"Error generating embedding: {str(e)}")
+        raise
 
 def get_embedding_paths(docs_dir: str) -> Tuple[str, str, str]:
     """Get paths for embedding related files."""
@@ -70,7 +106,7 @@ def ensure_embedding_dir(docs_dir: str) -> str:
 async def read_file(filepath: str) -> Optional[str]:
     """Read file content based on its extension asynchronously."""
     if not os.path.exists(filepath):
-        print(f"File not found: {filepath}")
+        logger.error(f"File not found: {filepath}")
         return None
         
     ext = os.path.splitext(filepath)[1].lower()
@@ -86,14 +122,43 @@ async def read_file(filepath: str) -> Optional[str]:
             doc = Document(filepath)
             return "\n".join([para.text for para in doc.paragraphs])
         else:
-            print(f"Unsupported file format: {ext}")
+            logger.error(f"Unsupported file format: {ext}")
             return None
     except Exception as e:
-        print(f"Error reading file {filepath}: {str(e)}")
+        logger.error(f"Error reading file {filepath}: {str(e)}")
         return None
 
+async def process_chunks(chunks: List[str], filepath: str) -> Tuple[List[np.ndarray], List[str], List[str], List[Dict]]:
+    """Process chunks in batches with retries."""
+    embeddings = []
+    texts = []
+    sources = []
+    metadata = []
+
+    for i in range(0, len(chunks), CHUNK_BATCH_SIZE):
+        batch = chunks[i:i + CHUNK_BATCH_SIZE]
+        batch_embeddings = await asyncio.gather(
+            *[embed_text(chunk) for chunk in batch],
+            return_exceptions=True
+        )
+
+        for chunk, emb in zip(batch, batch_embeddings):
+            if isinstance(emb, Exception):
+                logger.error(f"Error processing chunk: {str(emb)}")
+                continue
+            if emb is not None:
+                embeddings.append(emb)
+                texts.append(chunk)
+                sources.append(filepath)
+                metadata.append({"source": filepath})
+
+        # Small delay between batches
+        await asyncio.sleep(0.1)
+
+    return embeddings, texts, sources, metadata
+
 async def process_files_async(docs_dir: str):
-    """Process files and create embeddings asynchronously."""
+    """Process files and create embeddings asynchronously with improved error handling."""
     if not os.path.exists(docs_dir):
         raise HTTPException(status_code=404, detail=f"Directory not found: {docs_dir}")
 
@@ -101,21 +166,21 @@ async def process_files_async(docs_dir: str):
              if os.path.isfile(os.path.join(docs_dir, f))]
              
     if not files:
-        print(f"No files found in {docs_dir}")
+        logger.warning(f"No files found in {docs_dir}")
         return
 
-    print(f"Processing {len(files)} files in {docs_dir}")
+    logger.info(f"Processing {len(files)} files in {docs_dir}")
     
     # Initialize storage
     index = faiss.IndexFlatIP(EMBEDDING_SIZE)
-    texts = []
-    sources = []
-    metadata = []
-    embeddings_buffer = []
+    all_texts = []
+    all_sources = []
+    all_metadata = []
+    all_embeddings = []
 
     for filename in files:
         filepath = os.path.join(docs_dir, filename)
-        print(f"Processing: {filename}")
+        logger.info(f"Processing: {filename}")
         
         content = await read_file(filepath)
         if not content:
@@ -124,29 +189,25 @@ async def process_files_async(docs_dir: str):
         # Process content
         cleaned_content = preprocess_text(content)
         chunks = text_splitter.split_text(cleaned_content)
-        print(f"Generated {len(chunks)} chunks from {filename}")
+        logger.info(f"Generated {len(chunks)} chunks from {filename}")
 
-        # Generate embeddings
-        chunk_embeddings = []
-        for chunk in chunks:
-            embedding = await embed_text(chunk)
-            if embedding is not None:
-                chunk_embeddings.append(embedding)
-                texts.append(chunk)
-                sources.append(filepath)
-                metadata.append({"source": filepath})
-
-        if chunk_embeddings:
-            embeddings_buffer.extend(chunk_embeddings)
-            print(f"Added {len(chunk_embeddings)} embeddings from {filename}")
+        # Process chunks and get embeddings
+        embeddings, texts, sources, metadata = await process_chunks(chunks, filepath)
+        
+        if embeddings:
+            all_embeddings.extend(embeddings)
+            all_texts.extend(texts)
+            all_sources.extend(sources)
+            all_metadata.extend(metadata)
+            logger.info(f"Added {len(embeddings)} embeddings from {filename}")
         else:
-            print(f"No valid embeddings generated for {filename}")
+            logger.warning(f"No valid embeddings generated for {filename}")
 
     # Add all embeddings to index
-    if embeddings_buffer:
-        embeddings_array = np.array(embeddings_buffer, dtype=np.float32)
+    if all_embeddings:
+        embeddings_array = np.array(all_embeddings, dtype=np.float32)
         index.add(embeddings_array)
-        print(f"Total embeddings added to index: {len(embeddings_buffer)}")
+        logger.info(f"Total embeddings added to index: {len(all_embeddings)}")
         
         # Save files
         embedding_dir = ensure_embedding_dir(docs_dir)
@@ -157,18 +218,19 @@ async def process_files_async(docs_dir: str):
             faiss.write_index(index, index_path)
             with open(metadata_path, 'wb') as f:
                 pickle.dump({
-                    'texts': texts,
-                    'sources': sources,
-                    'metadata': metadata
+                    'texts': all_texts,
+                    'sources': all_sources,
+                    'metadata': all_metadata
                 }, f)
-            print(f"Saved index and metadata to {embedding_dir}")
+            logger.info(f"Saved index and metadata to {embedding_dir}")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error saving index files: {str(e)}")
     else:
-        print("No valid embeddings generated from any files")
+        logger.error("No valid embeddings generated from any files")
+        raise HTTPException(status_code=500, detail="Failed to generate any valid embeddings")
 
 async def load_index(docs_dir: str) -> Tuple[faiss.Index, List[str], List[str]]:
-    """Load index and metadata from the specified directory asynchronously."""
+    """Load index and metadata from the specified directory."""
     embedding_dir, index_path, metadata_path = get_embedding_paths(docs_dir)
     
     if not os.path.exists(index_path) or not os.path.exists(metadata_path):
@@ -186,10 +248,11 @@ async def load_index(docs_dir: str) -> Tuple[faiss.Index, List[str], List[str]]:
         return index, texts, sources
         
     except Exception as e:
+        logger.error(f"Error loading index: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error loading index: {str(e)}")
 
 async def query_index_async(query: str, k: int = 3, docs_dir: str = None) -> Tuple[List[str], List[str], List[float]]:
-    """Query the index for relevant documents asynchronously."""
+    """Query the index for relevant documents with retry mechanism."""
     if not docs_dir:
         raise HTTPException(status_code=400, detail="docs_dir parameter is required")
 
@@ -197,7 +260,7 @@ async def query_index_async(query: str, k: int = 3, docs_dir: str = None) -> Tup
         # Load index
         index, texts, sources = await load_index(docs_dir)
         
-        # Generate query embedding
+        # Generate query embedding with retry
         query_embedding = await embed_text(query)
         if query_embedding is None:
             raise HTTPException(status_code=500, detail="Failed to generate query embedding")
@@ -206,9 +269,11 @@ async def query_index_async(query: str, k: int = 3, docs_dir: str = None) -> Tup
         D, I = index.search(query_embedding.reshape(1, -1), k)
         
         # Prepare results
-        results = [(texts[i], sources[i], float(d)) 
-                  for d, i in zip(D[0], I[0]) 
-                  if i < len(texts)]
+        results = [
+            (texts[i], sources[i], float(d)) 
+            for d, i in zip(D[0], I[0]) 
+            if i < len(texts)
+        ]
         
         if not results:
             return [], [], []
@@ -216,4 +281,5 @@ async def query_index_async(query: str, k: int = 3, docs_dir: str = None) -> Tup
         return zip(*results)  # Unzip into separate lists
         
     except Exception as e:
+        logger.error(f"Error during query: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error during query: {str(e)}")
