@@ -1,3 +1,5 @@
+# chat_routes.py
+
 from fastapi import (
     APIRouter, 
     WebSocket, 
@@ -26,7 +28,6 @@ agent_pool = AgentPoolManager()
 agent_manager = AgentManager()
 templates = Jinja2Templates(directory="templates")
 
-# Pydantic Models
 class ChatRoomCreate(BaseModel):
     name: str
     agent_names: List[str]
@@ -48,7 +49,6 @@ class Message(BaseModel):
     error: Optional[str] = None
     used_knowledge: Optional[List[Dict[str, Any]]] = None
 
-# WebSocket Connection Manager
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, List[WebSocket]] = {}
@@ -86,20 +86,16 @@ class ConnectionManager:
                     logger.error(f"Error broadcasting message: {str(e)}")
                     dead_connections.append(connection)
             
-            # Remove dead connections
             for dead in dead_connections:
                 self.disconnect(dead, room_id)
 
 manager = ConnectionManager()
-
-# 內存存儲
 chat_rooms = {}
 chat_history = {}
 
 async def handle_chat_message(websocket: WebSocket, room_id: str, data: Dict):
     """處理聊天消息"""
     try:
-        # 創建用戶消息
         user_message = {
             "id": str(uuid.uuid4()),
             "sender": "user",
@@ -113,29 +109,33 @@ async def handle_chat_message(websocket: WebSocket, room_id: str, data: Dict):
             "message": user_message
         }, room_id)
 
-        # 獲取房間信息
         room = chat_rooms.get(room_id)
         if not room:
             logger.error(f"Room {room_id} not found")
             return
 
-        # 獲取並註冊所有 agents
         available_agents = []
         for agent_data in room["agents"]:
             agent = await agent_pool.get_agent_instance(agent_data["name"])
             if agent:
-                agent_manager.register_agent(agent)
                 available_agents.append(agent)
 
         if not available_agents:
             logger.error("No valid agents found")
             return
 
+        # 註冊 agents 之間的互相認識
+        for agent in available_agents:
+            other_agents = {
+                other.name: other for other in available_agents if other.name != agent.name
+            }
+            agent.register_available_agents(other_agents)
+
         # 發送處理開始消息
         processing_start = {
             "id": str(uuid.uuid4()),
             "sender": "system",
-            "content": "開始分析訊息並決定處理順序...",
+            "content": "開始分析訊息...",
             "timestamp": datetime.now().isoformat(),
             "status": "processing"
         }
@@ -144,41 +144,43 @@ async def handle_chat_message(websocket: WebSocket, room_id: str, data: Dict):
             "message": processing_start
         }, room_id)
 
-        # 使用 AgentManager 處理消息
+        # 讓所有 agents 評估自己的能力
+        evaluations = []
+        for agent in available_agents:
+            eval_result = await agent.evaluate_capability(data.get("message", ""))
+            evaluations.append((agent, eval_result))
+
+        # 根據評分選擇起始 agent
+        initial_agent, best_eval = max(evaluations, key=lambda x: x[1]["score"])
+
+        # 顯示選擇結果
+        selection_message = {
+            "id": str(uuid.uuid4()),
+            "sender": "system",
+            "content": f"選擇 {initial_agent.name} 開始處理（評分: {best_eval['score']}）\n原因: {best_eval['reason']}",
+            "timestamp": datetime.now().isoformat(),
+            "status": "processing"
+        }
+        await manager.broadcast({
+            "type": "message",
+            "message": selection_message
+        }, room_id)
+
+        # 處理消息
         context = {
             "room_id": room_id,
             "history": chat_history[room_id]
         }
 
-        # 使用第一個 agent 作為起始點
-        initial_agent = available_agents[0].name
-        result = await agent_manager.process_message(
-            data.get("message", ""),
-            initial_agent,
-            context
-        )
-
-        # 顯示決定的處理順序
-        if "processing_sequence" in result:
-            sequence_message = {
-                "id": str(uuid.uuid4()),
-                "sender": "system",
-                "content": f"處理順序: {' -> '.join(result['processing_sequence'])}",
-                "timestamp": datetime.now().isoformat(),
-                "status": "processing"
-            }
-            await manager.broadcast({
-                "type": "message",
-                "message": sequence_message
-            }, room_id)
+        result = await initial_agent.process_query(data.get("message", ""), context)
 
         # 顯示處理過程
-        if "result" in result and "message_trail" in result["result"]:
-            for step in result["result"]["message_trail"]:
+        if "message_trail" in result:
+            for step in result["message_trail"]:
                 trail_message = {
                     "id": str(uuid.uuid4()),
                     "sender": step["agent_name"],
-                    "content": f"{step['output']}",
+                    "content": step["output"],
                     "timestamp": step["timestamp"],
                     "is_trail": True
                 }
@@ -187,12 +189,14 @@ async def handle_chat_message(websocket: WebSocket, room_id: str, data: Dict):
                     "message": trail_message
                 }, room_id)
 
-                # 如果有下一個 agent，顯示轉發訊息
                 if step.get("next_agent"):
                     transfer_message = {
                         "id": str(uuid.uuid4()),
                         "sender": "system",
-                        "content": f"↓ 轉發給 {step['next_agent']} ↓",
+                        "content": (
+                            f"↓ 轉發給 {step['next_agent']} ↓\n"
+                            f"原因: {step.get('next_agent_reason', '需要進一步處理')}"
+                        ),
                         "timestamp": step["timestamp"],
                         "is_trail": True
                     }
@@ -202,11 +206,11 @@ async def handle_chat_message(websocket: WebSocket, room_id: str, data: Dict):
                     }, room_id)
 
         # 發送最終結果
-        if "result" in result and "content" in result["result"]:
+        if "content" in result:
             final_message = {
                 "id": str(uuid.uuid4()),
                 "sender": "system",
-                "content": result["result"]["content"],
+                "content": result["content"],
                 "timestamp": datetime.now().isoformat(),
                 "status": "completed"
             }
@@ -244,7 +248,6 @@ async def handle_chat_message(websocket: WebSocket, room_id: str, data: Dict):
             "message": error_message
         }, room_id)
 
-# WebSocket endpoint
 @router.websocket("/chat/rooms/{room_id}/ws")
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
     """WebSocket 端點"""
@@ -285,7 +288,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
         if websocket.client_state != WebSocketState.DISCONNECTED:
             await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
 
-# REST endpoints
 @router.get("/chat")
 async def chat_room(request: Request):
     """Render chat room page"""

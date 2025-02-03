@@ -1,0 +1,16 @@
+{
+  "name": "test11",
+  "description": "9~12",
+  "created_at": "2025-01-16T13:59:06.605921",
+  "base_prompt": "You are a dynamic processing agent capable of handling various tasks.",
+  "type": "dynamic",
+  "template_name": "market_analyst",
+  "parameters": {},
+  "knowledge_files": [
+    "document_20250113145644.pdf",
+    "document_20250113145701.pdf",
+    "document_20250113145746.pdf",
+    "document_20250113145822.pdf"
+  ],
+  "docs_dir": "agent_pool/test11/docs"
+}

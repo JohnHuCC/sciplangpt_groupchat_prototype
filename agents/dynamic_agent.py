@@ -1,3 +1,5 @@
+# dynamic_agent.py
+
 from typing import Dict, Any, List, Optional, Tuple
 import os
 import logging
@@ -16,30 +18,28 @@ class DynamicAgent(BaseAgent):
                  description: str = "Dynamic processing agent for general tasks",
                  parameters: Dict[str, Any] = None,
                  llm_config: Optional[Dict[str, Any]] = None,
-                 **kwargs):  # 添加 **kwargs 來接收額外的參數
+                 **kwargs):
+        # 先調用父類的初始化方法
         super().__init__(
             name=name,
             base_prompt=base_prompt,
             docs_dir=docs_dir,
             description=description,
-            parameters=parameters,
+            parameters=parameters or {},
             llm_config=llm_config
         )
         
-        self.similarity_threshold = parameters.get("similarity_threshold", 0.0)
-        self.max_knowledge_items = parameters.get("max_knowledge_items", 3)
+        # 設定本類別特有的參數
+        self.similarity_threshold = self.parameters.get("similarity_threshold", 0.0)
+        self.max_knowledge_items = self.parameters.get("max_knowledge_items", 3)
 
     async def _process_message(self, message: str, context: Optional[Dict] = None) -> str:
-        """實現父類的抽象方法，處理具體的消息邏輯"""
+        """處理具體的消息邏輯"""
         try:
             # 查詢知識庫
             texts, sources, scores = await self._query_knowledge_base(message)
-            
-            # 格式化結果
             knowledge_results = self._format_knowledge_results(texts, sources, scores)
-            
-            # 構建提示
-            prompt = self._build_prompt(message, knowledge_results)
+            prompt = self._build_prompt(message, knowledge_results, context)
             
             # 生成回應
             messages = [
@@ -47,16 +47,122 @@ class DynamicAgent(BaseAgent):
                 {"role": "user", "content": prompt}
             ]
 
-            # 使用可能在參數中指定的溫度值
             temperature = context.get("temperature") if context else None
-            response = await self._create_chat_completion_async(messages, temperature)
             
-            return response
+            try:
+                response = await self.client.chat.completions.create(
+                    model=self.llm_config['model'],
+                    messages=messages,
+                    temperature=temperature or self.parameters.get("temperature", 0.7)
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.error(f"OpenAI API error: {str(e)}")
+                raise
             
         except Exception as e:
             error_msg = f"Error processing message: {str(e)}"
             logger.error(error_msg)
             raise HTTPException(status_code=500, detail=error_msg)
+
+    async def evaluate_capability(self, message: str) -> Dict:
+        """評估處理能力"""
+        try:
+            texts, sources, scores = await self._query_knowledge_base(message, k=1)
+            knowledge_score = max(scores) if scores else 0.0
+            
+            eval_prompt = f"""請評估你處理以下訊息的能力:
+
+訊息: {message}
+
+知識庫相關度: {knowledge_score:.2f}
+
+請考慮:
+1. 訊息的類型和複雜度
+2. 你的專長和經驗
+3. 知識庫中的相關資訊
+4. 處理這類訊息的成功經驗
+
+請提供:
+1. 能力評分 (0-1的數字，越高表示越適合)
+2. 評估理由
+
+只需要回答一個數字評分，然後換行給出理由。"""
+
+            messages = [
+                {"role": "system", "content": "你是一個專業的動態處理代理，需要評估自己處理訊息的能力。"},
+                {"role": "user", "content": eval_prompt}
+            ]
+            
+            try:
+                response = await self.client.chat.completions.create(
+                    model=self.llm_config['model'],
+                    messages=messages,
+                    temperature=0.3
+                )
+                result = response.choices[0].message.content
+                
+                try:
+                    score = float(result.split('\n')[0])
+                    reason = '\n'.join(result.split('\n')[1:])
+                except:
+                    score = 0.5
+                    reason = result
+                    
+                return {
+                    "score": min(max(score, 0.0), 1.0),
+                    "reason": reason
+                }
+            except Exception as e:
+                logger.error(f"OpenAI API error: {str(e)}")
+                raise
+            
+        except Exception as e:
+            logger.error(f"Error evaluating capability: {str(e)}")
+            return {
+                "score": 0.0,
+                "reason": f"評估時發生錯誤: {str(e)}"
+            }
+            
+    async def make_decision(self, message: str) -> str:
+        """決定是否需要繼續處理"""
+        try:
+            texts, _, scores = await self._query_knowledge_base(message, k=2)
+            has_more_knowledge = len(scores) > 1 and scores[1] >= self.similarity_threshold
+
+            decision_prompt = f"""請決定是否需要處理以下訊息:
+
+訊息: {message}
+
+知識庫狀態: {"還有其他相關資訊" if has_more_knowledge else "無更多相關資訊"}
+
+請考慮:
+1. 訊息是否已經得到完整處理
+2. 是否還需要補充或改進
+3. 繼續處理是否能帶來更多價值
+4. 知識庫中是否還有相關資訊需要使用
+
+請直接回答 'yes' 或 'no'。"""
+
+            messages = [
+                {"role": "system", "content": "你是一個專業的動態處理代理，需要決定是否需要繼續處理訊息。"},
+                {"role": "user", "content": decision_prompt}
+            ]
+            
+            try:
+                response = await self.client.chat.completions.create(
+                    model=self.llm_config['model'],
+                    messages=messages,
+                    temperature=0.1
+                )
+                return response.choices[0].message.content.strip().lower()
+            except Exception as e:
+                logger.error(f"OpenAI API error: {str(e)}")
+                raise
+            
+        except Exception as e:
+            logger.error(f"Error making decision: {str(e)}")
+            return "no"
 
     async def _query_knowledge_base(self, query: str, k: Optional[int] = None) -> Tuple[List[str], List[str], List[float]]:
         """包裝知識庫查詢的輔助函數"""
@@ -69,7 +175,6 @@ class DynamicAgent(BaseAgent):
                 docs_dir=self.docs_dir
             )
             
-            # 根據相似度閾值過濾結果
             if self.similarity_threshold > 0:
                 filtered_results = [
                     (text, source, score)
@@ -104,12 +209,20 @@ class DynamicAgent(BaseAgent):
             
         return results
 
-    def _build_prompt(self, query: str, knowledge_results: List[Dict[str, Any]]) -> str:
+    def _build_prompt(self, query: str, knowledge_results: List[Dict[str, Any]], 
+                     context: Optional[Dict] = None) -> str:
         """構建提示文本"""
         formatted_base_prompt = self._format_prompt(self.base_prompt)
         knowledge_format = self.parameters.get("knowledge_format", "detailed")
         
         prompt = f"{formatted_base_prompt}\n\nQuery: {query}\n"
+        
+        if context and "history" in context:
+            history = context["history"][-5:]
+            prompt += "\n相關歷史:\n" + "\n".join([
+                f"- {msg.get('sender', 'unknown')}: {msg.get('content', '')}"
+                for msg in history
+            ])
         
         if knowledge_results:
             prompt += "\nRelevant Knowledge:\n"
@@ -127,15 +240,3 @@ class DynamicAgent(BaseAgent):
                     prompt += "\n"
         
         return prompt
-
-    @classmethod
-    def from_config(cls, config: Dict) -> 'DynamicAgent':
-        """從配置創建實例"""
-        return cls(
-            name=config["name"],
-            base_prompt=config["base_prompt"],
-            docs_dir=config["docs_dir"],
-            description=config.get("description", "Dynamic processing agent for general tasks"),
-            parameters=config.get("parameters", {}),
-            llm_config=config.get("llm_config")
-        )

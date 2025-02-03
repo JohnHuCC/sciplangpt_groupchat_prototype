@@ -1,3 +1,5 @@
+# base_agent.py
+
 import logging
 from openai import AsyncOpenAI
 from typing import Dict, Any, Optional, List
@@ -14,7 +16,6 @@ class BaseAgent:
                  description: str,
                  parameters: Dict[str, Any] = None,
                  llm_config: Optional[Dict[str, Any]] = None):
-        # 參數驗證
         if not name or not isinstance(name, str):
             raise ValueError("Name must be a non-empty string")
         if not base_prompt or not isinstance(base_prompt, str):
@@ -34,8 +35,7 @@ class BaseAgent:
             "temperature": self.parameters.get("temperature", 0.7)
         }
         
-        # 新增的屬性
-        self.available_agents = {}  # 可用的其他 agents
+        self.available_agents = {}
         self.knowledge_embedding = None
         self.embedding_model = parameters.get("embedding_model", "text-embedding-ada-002")
         
@@ -43,7 +43,55 @@ class BaseAgent:
         self._validate_config(self.llm_config)
         self._initialize_client()
         logger.info(f"Successfully initialized agent {self.name}")
-        
+
+    async def evaluate_capability(self, prompt: str) -> Dict:
+        """評估 agent 處理當前訊息的能力"""
+        try:
+            messages = [
+                {"role": "system", "content": self.base_prompt},
+                {"role": "user", "content": prompt}
+            ]
+            
+            response = await self._create_chat_completion_async(messages, temperature=0.3)
+            
+            try:
+                score = float(response.split('\n')[0])
+                reason = '\n'.join(response.split('\n')[1:])
+            except:
+                score = 0.0
+                reason = response
+                
+            return {
+                "score": min(max(score, 0.0), 1.0),
+                "reason": reason
+            }
+            
+        except Exception as e:
+            logger.error(f"Error evaluating capability: {str(e)}")
+            return {
+                "score": 0.0,
+                "reason": f"評估時發生錯誤: {str(e)}"
+            }
+
+    async def make_decision(self, prompt: str) -> str:
+        """做出是/否決定"""
+        try:
+            messages = [
+                {"role": "system", "content": self.base_prompt},
+                {"role": "user", "content": prompt}
+            ]
+            
+            response = await self._create_chat_completion_async(
+                messages,
+                temperature=0.1
+            )
+            
+            return response.strip().lower()
+            
+        except Exception as e:
+            logger.error(f"Error making decision: {str(e)}")
+            return "no"
+            
     def register_available_agents(self, agents: Dict[str, 'BaseAgent']):
         """註冊可用的其他 agents"""
         self.available_agents = {name: agent for name, agent in agents.items() 
@@ -68,98 +116,16 @@ class BaseAgent:
         missing_keys = [key for key in required_keys if key not in llm_config]
         if missing_keys:
             raise ValueError(f"Missing required configuration keys: {missing_keys}")
-            
-    async def decide_next_agent(self, message: str, current_result: str) -> Optional[str]:
-        """決定下一個處理的 agent"""
-        try:
-            if not self.available_agents:
-                return None
 
-            prompt = f"""基於當前的處理結果，決定下一步應該由哪個 agent 處理。請考慮每個 agent 的專長來做決定。
-
-    當前消息: {message}
-    當前處理結果: {current_result}
-
-    可用的 agents:
-    {chr(10).join([f"- {name}: {agent.description}" for name, agent in self.available_agents.items()])}
-
-    重要規則：
-    1. 除非真的完全不需要其他 agent 的專業知識，否則應該選擇一個最適合的 agent 繼續處理
-    2. 要充分利用每個 agent 的專長
-    3. 確保答案的完整性和全面性
-
-    請從上述 agents 中選擇一個最適合處理下一步的 agent。
-    只需要回答 agent 的名稱，如果確實不需要進一步處理才回答 "NONE"。"""
-
-            messages = [
-                {"role": "system", "content": "你是一個專業的任務分配器，需要確保工作流程的完整性和效率。"},
-                {"role": "user", "content": prompt}
-            ]
-            
-            response = await self._create_chat_completion_async(messages, temperature=0.3)
-            next_agent = response.strip()
-            
-            logger.info(f"Agent {self.name} decided next agent: {next_agent}")
-            
-            if next_agent == "NONE":
-                logger.warning(f"Agent {self.name} decided to end the chain. Available agents were: {list(self.available_agents.keys())}")
-                return None
-            elif next_agent in self.available_agents:
-                return next_agent
-            else:
-                logger.warning(f"Invalid next agent decision: {next_agent}")
-                # 如果決策無效，選擇第一個可用的 agent
-                return next(iter(self.available_agents))
-                
-        except Exception as e:
-            logger.error(f"Error deciding next agent: {str(e)}")
-            return None
-
-    async def create_embedding(self, text: str) -> Optional[np.ndarray]:
-        """創建文本的 embedding"""
-        try:
-            response = await self.client.embeddings.create(
-                model=self.embedding_model,
-                input=text
-            )
-            return np.array(response.data[0].embedding)
-        except Exception as e:
-            logger.error(f"Error creating embedding: {str(e)}")
-            return None
-
-    async def initialize_knowledge_embedding(self, knowledge_text: str):
-        """初始化 agent 的知識 embedding"""
-        try:
-            self.knowledge_embedding = await self.create_embedding(knowledge_text)
-            logger.info(f"Successfully initialized knowledge embedding for agent {self.name}")
-        except Exception as e:
-            logger.error(f"Failed to initialize knowledge embedding: {str(e)}")
-            
-    async def _create_chat_completion_async(self, messages: list, 
-                                          temperature: Optional[float] = None) -> str:
-        """非同步方式創建聊天完成"""
-        try:
-            temp = temperature or self.parameters.get("temperature", 0.7)
-            
-            response = await self.client.chat.completions.create(
-                model=self.llm_config['model'],
-                messages=messages,
-                temperature=temp
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Failed to create chat completion: {str(e)}")
-            raise RuntimeError(f"Failed to create chat completion: {str(e)}")
-            
     async def process_query(self, message: str, context: Optional[Dict] = None) -> Dict:
         """處理查詢"""
         try:
-            message_trail = context.get('message_trail', []) if context else []
+            self.context = context or {}
+            message_trail = self.context.get('message_trail', [])
+            processed_agents = self.context.get('processed_agents', [])
             
-            # 處理當前消息
-            current_result = await self._process_message(message, context)
+            current_result = await self._process_message(message, self.context)
             
-            # 記錄當前處理結果
             current_step = {
                 "agent_name": self.name,
                 "input": message,
@@ -167,36 +133,57 @@ class BaseAgent:
                 "timestamp": datetime.now().isoformat()
             }
             message_trail.append(current_step)
+            processed_agents.append(self.name)
             
-            # 決定下一個處理者
-            next_agent_name = await self.decide_next_agent(message, current_result)
-            current_step["next_agent"] = next_agent_name
+            self.context.update({
+                'message_trail': message_trail,
+                'processed_agents': processed_agents
+            })
+            
+            # 評估其他 agents 的能力
+            if self.available_agents:
+                evaluations = []
+                for agent_name, agent in self.available_agents.items():
+                    if agent_name not in processed_agents:
+                        eval_result = await agent.evaluate_capability(current_result)
+                        evaluations.append((agent_name, eval_result))
+                
+                # 選擇評分最高的 agent
+                if evaluations:
+                    next_agent_name, best_eval = max(evaluations, key=lambda x: x[1]["score"])
+                    current_step["next_agent"] = next_agent_name
+                    current_step["next_agent_reason"] = best_eval["reason"]
             
             response = {
                 "agent": self.name,
                 "content": current_result,
                 "status": "completed",
                 "timestamp": datetime.now().isoformat(),
-                "message_trail": message_trail
+                "message_trail": message_trail,
+                "processed_agents": processed_agents
             }
 
             # 如果有下一個處理者，繼續處理
-            if next_agent_name and next_agent_name in self.available_agents:
+            if current_step.get("next_agent") and current_step["next_agent"] in self.available_agents:
                 try:
-                    next_agent = self.available_agents[next_agent_name]
-                    context = context or {}
-                    context['message_trail'] = message_trail
+                    next_agent = self.available_agents[current_step["next_agent"]]
+                    should_continue = await next_agent.make_decision(
+                        f"Do you need to process this message further?\nMessage: {current_result}"
+                    )
                     
-                    next_result = await next_agent.process_query(current_result, context)
-                    response["next_agent_result"] = next_result
-                    if "message_trail" in next_result:
-                        response["message_trail"] = next_result["message_trail"]
+                    if should_continue == "yes":
+                        next_result = await next_agent.process_query(current_result, self.context)
+                        response.update({
+                            "next_agent_result": next_result,
+                            "message_trail": next_result.get("message_trail", message_trail),
+                            "processed_agents": next_result.get("processed_agents", processed_agents)
+                        })
                 except Exception as e:
-                    logger.error(f"Error in next agent {next_agent_name}: {str(e)}")
+                    logger.error(f"Error in next agent {current_step['next_agent']}: {str(e)}")
                     response["next_agent_error"] = str(e)
             
             return response
-            
+                
         except Exception as e:
             logger.error(f"Error processing query in agent {self.name}: {str(e)}")
             return {
@@ -241,7 +228,6 @@ class BaseAgent:
         processed_content = content
         
         if language != "default":
-            # 這裡可以添加語言處理邏輯
             pass
             
         if max_length and len(processed_content) > max_length:
