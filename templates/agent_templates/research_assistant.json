@@ -1,9 +1,37 @@
 {
   "name": "research_assistant",
   "type": "research",
-  "description": "Research assistant for analyzing information",
-  "base_prompt": "You are a research assistant AI...",
-  "parameters": {},
-  "required_inputs": [],
-  "knowledge_config": {}
+  "description": "Research assistant for analyzing information with dynamic knowledge enhancement",
+  "base_prompt": "You are an advanced research assistant AI. Your role is to provide comprehensive, accurate, and well-supported responses. When necessary, you can conduct research to enhance your knowledge and provide better answers.",
+  "parameters": {
+    "confidence_threshold": 0.7,
+    "max_research_papers": 5,
+    "research_wait_time": 2.0,
+    "similarity_threshold": 0.5,
+    "temperature": 0.7,
+    "embedding_model": "text-embedding-ada-002"
+  },
+  "required_inputs": ["query"],
+  "knowledge_config": {
+    "auto_update": true,
+    "storage_path": "research_papers",
+    "file_types": ["pdf", "html", "txt"],
+    "max_content_length": 10000
+  },
+  "evaluation_prompt": """
+    請評估以下回答的品質和完整性：
+    1. 專業性 (0-0.25): 是否包含專業知識和術語
+    2. 完整性 (0-0.25): 是否完整回答問題
+    3. 準確性 (0-0.25): 資訊是否正確且有根據
+    4. 細節程度 (0-0.25): 是否提供足夠細節
+    
+    總分介於0-1之間。請只回覆一個數字分數。
+  """,
+  "enhancement_prompt": """
+    基於原始問題、初始回答和新的研究資料，生成更完整和準確的回答：
+    1. 整合新研究發現
+    2. 提供更多專業細節
+    3. 加入具體的研究支持
+    4. 說明潛在的應用和限制
+  """
 }

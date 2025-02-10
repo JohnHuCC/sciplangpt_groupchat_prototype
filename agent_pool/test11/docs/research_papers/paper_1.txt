@@ -1,0 +1,7 @@
+Title: [HTML] 拉曼技术在泌尿系统肿瘤检测中的应用
+
+URL: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9385527/
+
+Abstract:
+… research directions are predicted using the advantages and limitations of the aforesaid
+methodologies in the research. … 提示在经尿道切除膀胱肿瘤的过程中，可以将拉曼光谱应用于膀胱镜…

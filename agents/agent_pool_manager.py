@@ -38,7 +38,25 @@ class AgentCreateBase(BaseModel):
         base_prompts = {
             "dynamic": "You are a dynamic processing agent capable of handling various tasks.",
             "qa": "You are a specialized Q&A agent designed to provide accurate answers based on available knowledge.",
-            "research": "You are a research analysis agent focused on deep analysis and knowledge synthesis."
+            "research": """You are a research analysis agent focused on deep analysis and knowledge synthesis. 
+                         When your confidence is low, you can actively search for additional information to enhance your knowledge."""
+        }
+        
+        # 根據不同類型設置不同的預設參數
+        default_parameters = {
+            "dynamic": {},
+            "qa": {},
+            "research": {
+                "confidence_threshold": 0.7,
+                "max_research_papers": 5,
+                "research_wait_time": 2.0
+            }
+        }
+        
+        # 合併預設參數和用戶提供的參數
+        merged_parameters = {
+            **default_parameters.get(self.type, {}),
+            **self.parameters
         }
         
         return AgentConfig(
@@ -47,7 +65,7 @@ class AgentCreateBase(BaseModel):
             template_name=self.template_name,
             base_prompt=base_prompts.get(self.type, base_prompts["dynamic"]),
             type=self.type,
-            parameters=self.parameters
+            parameters=merged_parameters
         )
 
 class Agent(BaseModel):
@@ -228,29 +246,29 @@ class AgentPoolManager:
                 return None
                     
             try:
-                # Create instance based on agent type
+                # 根據 agent 類型創建實例
                 agent_class = None
                 if config.get("type") == "question_based":
                     from agents.question_based_agent import QuestionBasedResearchAgent
                     agent_class = QuestionBasedResearchAgent
-                    agent = agent_class(
-                        name=config["name"],
-                        base_prompt=config["base_prompt"],
-                        docs_dir=config["docs_dir"],
-                        parameters=config.get("parameters", {}),
-                        query_templates=config.get("query_templates", [])
-                    )
+                elif config.get("type") == "research":
+                    from agents.research_agent import ResearchAgent
+                    agent_class = ResearchAgent
                 else:
                     from agents.dynamic_agent import DynamicAgent
                     agent_class = DynamicAgent
-                    agent = agent_class(
-                        name=config["name"],
-                        base_prompt=config["base_prompt"],
-                        docs_dir=config["docs_dir"],
-                        parameters=config.get("parameters", {})
-                    )
                 
-                # Initialize embedding
+                # 創建 agent 實例
+                agent = agent_class(
+                    name=config["name"],
+                    base_prompt=config["base_prompt"],
+                    docs_dir=config["docs_dir"],
+                    description=config.get("description", ""),
+                    parameters=config.get("parameters", {}),
+                    query_templates=config.get("query_templates", [])
+                )
+                
+                # 初始化 embedding
                 await self.ensure_embeddings(config["docs_dir"])
                 
                 logger.info(f"Successfully created agent instance: {agent}")

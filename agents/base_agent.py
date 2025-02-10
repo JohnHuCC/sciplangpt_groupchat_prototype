@@ -1,5 +1,3 @@
-# base_agent.py
-
 import logging
 from openai import AsyncOpenAI
 from typing import Dict, Any, Optional, List
@@ -7,6 +5,12 @@ from concurrent.futures import ThreadPoolExecutor
 import os
 import numpy as np
 from datetime import datetime
+import aiohttp
+import time
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+import asyncio
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +42,12 @@ class BaseAgent:
         self.available_agents = {}
         self.knowledge_embedding = None
         self.embedding_model = parameters.get("embedding_model", "text-embedding-ada-002")
+        
+        # 爬蟲相關屬性
+        self._driver = None
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
         
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._validate_config(self.llm_config)
@@ -193,6 +203,33 @@ class BaseAgent:
                 "timestamp": datetime.now().isoformat(),
                 "message_trail": message_trail
             }
+
+    async def _create_chat_completion_async(self, messages: List[Dict[str, str]], 
+                                          temperature: Optional[float] = None) -> str:
+        """建立非同步 chat completion"""
+        try:
+            temp = temperature if temperature is not None else self.llm_config.get("temperature", 0.7)
+            response = await self.client.chat.completions.create(
+                model=self.llm_config["model"],
+                messages=messages,
+                temperature=temp
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Error creating chat completion: {str(e)}")
+            raise
+
+    async def create_embedding(self, text: str) -> Optional[np.ndarray]:
+        """建立文本嵌入"""
+        try:
+            response = await self.client.embeddings.create(
+                model=self.embedding_model,
+                input=text
+            )
+            return np.array(response.data[0].embedding)
+        except Exception as e:
+            logger.error(f"Error creating embedding: {str(e)}")
+            return None
     
     async def _process_message(self, message: str, context: Optional[Dict] = None) -> str:
         """實際處理消息的方法，子類需要實現此方法"""
@@ -234,6 +271,71 @@ class BaseAgent:
             processed_content = processed_content[:max_length] + "..."
             
         return processed_content
+
+    @property
+    def driver(self):
+        """懶加載 selenium driver"""
+        if self._driver is None:
+            from seleniumbase import Driver
+            self._driver = Driver(uc=True, headless=True)
+        return self._driver
+
+    def cleanup_driver(self):
+        """清理 selenium driver"""
+        if self._driver:
+            self._driver.quit()
+            self._driver = None
+
+    def find_element_safe(self, by: By, selector: str) -> Optional[Any]:
+        """安全地查找元素"""
+        try:
+            return self.driver.find_element(by, selector)
+        except Exception as e:
+            logger.error(f"Error finding element {selector}: {e}")
+            return None
+
+    async def fetch_page(self, url: str) -> Optional[str]:
+        """抓取網頁內容"""
+        try:
+            async with aiohttp.ClientSession(headers=self.headers) as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        return await response.text()
+                    return None
+        except Exception as e:
+            logger.error(f"Error fetching {url}: {e}")
+            return None
+
+    async def download_file(self, url: str, filename: str, folder: str) -> Optional[str]:
+        """下載文件"""
+        try:
+            os.makedirs(folder, exist_ok=True)
+            filepath = os.path.join(folder, filename)
+            
+            async with aiohttp.ClientSession(headers=self.headers) as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        with open(filepath, 'wb') as f:
+                            while True:
+                                chunk = await response.content.read(8192)
+                                if not chunk:
+                                    break
+                                f.write(chunk)
+                        return filepath
+                    return None
+        except Exception as e:
+            logger.error(f"Error downloading {url}: {e}")
+            return None
+
+    def selenium_get(self, url: str, wait_time: float = 2) -> bool:
+        """使用 Selenium 訪問頁面"""
+        try:
+            self.driver.get(url)
+            time.sleep(wait_time)
+            return True
+        except Exception as e:
+            logger.error(f"Error navigating to {url}: {e}")
+            return False
     
     def to_dict(self) -> Dict:
         """Convert agent instance to dictionary representation"""
@@ -262,6 +364,7 @@ class BaseAgent:
     async def cleanup(self):
         """非同步清理資源"""
         try:
+            self.cleanup_driver()
             if hasattr(self, '_executor'):
                 self._executor.shutdown(wait=True)
                 logger.info(f"Successfully cleaned up resources for agent {self.name}")
@@ -272,3 +375,4 @@ class BaseAgent:
         """確保程序結束時關閉執行器"""
         if hasattr(self, '_executor'):
             self._executor.shutdown(wait=False)
+            self.cleanup_driver()

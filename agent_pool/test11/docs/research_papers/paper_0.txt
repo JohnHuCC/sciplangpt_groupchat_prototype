@@ -1,0 +1,7 @@
+Title: 腸胃道黏膜微血管透視內視鏡影像處理晶片設計之研究(I)
+
+URL: https://ir.lib.nycu.edu.tw/handle/11536/101772
+
+Abstract:
+… 為了能不經切片檢查而直接觀察黏膜微血管來發現早期腸胃道… 因此,本計畫將試圖利用晶片實現
+電子式的影像合成與強化方式… to replace the mechanic control approach with electronic image …

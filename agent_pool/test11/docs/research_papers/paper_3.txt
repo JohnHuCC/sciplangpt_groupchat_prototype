@@ -1,0 +1,7 @@
+Title: 膠囊內視鏡用之腸胃道影像處理整合晶片設計
+
+URL: https://ir.lib.nycu.edu.tw/handle/11536/102879
+
+Abstract:
+… 晶片在微弱光源下偵測病變發生點,據以啟動耗電量較大的影像擷取與 壓縮電路.其次,再就人體
+腸胃道擷… Applying state-of-the-art video compression techniques may significantly reduce the …

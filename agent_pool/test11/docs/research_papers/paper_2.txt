@@ -1,0 +1,7 @@
+Title: 低功耗人体全消化道生理参数遥测胶囊的设计
+
+URL: https://www.opticsjournal.net/Articles/OJe155645f7deb3dc4/FullText
+
+Abstract:
+… 设计了一种连续监测胃肠道生理参数的低功耗参数遥测胶囊, 它主要… 136 h, 基本满足参数胶囊
+长时连续监测胃肠道生理参数的要求. … Design of a micro power management unit for wireless …
